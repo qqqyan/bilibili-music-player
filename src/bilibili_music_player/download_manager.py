@@ -54,12 +54,22 @@ class DownloadManager:
     # ------------------------------------------------------------ 队列操作
 
     async def enqueue(self, track_ids: list[str], priority: bool = False) -> None:
-        """批量入队。已缓存 / 已在队列中的跳过;priority=True 插入队首。"""
+        """批量入队。已完整缓存 / 已在队列中的跳过;priority=True 插入队首。
+
+        缓存判定实时查磁盘(文件可能被外部删除,内存索引不可信);
+        音频已缓存但视频缺失(failed 重试或升级旧缓存)时允许入队补下。
+        """
         for tid in track_ids:
-            if tid in self._local_index:
-                self._states[tid] = {"state": "done", "error": None}
-                continue
-            if self._states.get(tid, {}).get("state") in ("pending", "downloading"):
+            local_audio = await cache_store.get_local_qualities(tid)
+            state = self._states.get(tid, {}).get("state")
+            if local_audio and state != "failed":
+                # 本地缺视频 → 入队补下(兼容升级前只有音频的旧缓存)
+                local_video = await cache_store.get_local_videos(tid)
+                if local_video:
+                    self._mark_done(tid, local_audio)
+                    continue
+                # 缺视频:落入下方入队逻辑
+            if state in ("pending", "downloading"):
                 continue
             if priority:
                 self._queue.appendleft(tid)
@@ -68,6 +78,10 @@ class DownloadManager:
             self._states[tid] = {"state": "pending", "error": None}
         if track_ids:
             self._wake.set()
+
+    def _mark_done(self, tid: str, local_audio: list[dict]) -> None:
+        self._states[tid] = {"state": "done", "error": None}
+        self._local_index[tid] = local_audio
 
     async def refresh_local(self, track_id: str) -> None:
         """删除缓存后同步本地索引与状态。"""
@@ -97,18 +111,27 @@ class DownloadManager:
 
     # ------------------------------------------------------------ 状态查询
 
-    def get_status(self, track_id: str) -> dict:
-        local = self._local_index.get(track_id, [])
-        state = self._states.get(track_id, {})
+    async def get_status(self, track_id: str) -> dict:
+        """单曲缓存状态。音频/视频档位实时查磁盘,以文件真实存在为准。"""
+        local = await cache_store.get_local_qualities(track_id)
+        local_videos = await cache_store.get_local_videos(track_id)
+        state = self._states.get(track_id, {}).get("state")
+        # 队列状态(pending/downloading/failed)优先展示;否则按磁盘有无判断
+        if state not in ("pending", "downloading", "failed"):
+            state = "done" if local else "none"
         return {
             "track_id": track_id,
-            "state": state.get("state", "done" if local else "none"),
-            "error": state.get("error"),
+            "state": state,
+            "error": self._states.get(track_id, {}).get("error"),
             "local_qualities": local,
+            "local_videos": local_videos,
         }
 
-    def get_all_statuses(self) -> list[dict]:
-        return [self.get_status(tid) for tid in self._all_known_ids()]
+    async def get_all_statuses(self) -> list[dict]:
+        result = []
+        for tid in self._all_known_ids():
+            result.append(await self.get_status(tid))
+        return result
 
     def _all_known_ids(self) -> set[str]:
         ids = set(self._local_index.keys())
@@ -140,15 +163,16 @@ class DownloadManager:
             await asyncio.sleep(TASK_INTERVAL)
 
     async def _download_track(self, track_id: str) -> None:
-        """解析曲目(远程最高音质档)并下载落盘。失败自动重试。"""
+        """解析曲目,下载缺失的音频(最高档)/ 视频(最高画质)落盘。失败自动重试。
+
+        音频与视频独立判断缺失:音频是核心(播放必需),视频是增强(MV 画面)。
+        """
         last_err: Exception | None = None
         for attempt in range(RETRY_TIMES + 1):
             if attempt > 0:
                 await asyncio.sleep(2)
             try:
-                kind = "audio" if track_id.startswith("au") else "video"
-                resolved = await resolve_track(kind, track_id)
-                stream = resolved.audio_streams[-1]  # 已按音质升序,取最高
+                resolved = await resolve_track(track_id)
                 meta = {
                     "title": resolved.title,
                     "artist": resolved.artist,
@@ -156,8 +180,22 @@ class DownloadManager:
                     "duration": resolved.duration,
                     "kind": resolved.kind,
                     "source": resolved.source,
+                    "has_video": bool(resolved.video_streams),
                 }
-                await self._download_stream(track_id, stream, meta)
+                audio_needed = not await cache_store.get_local_qualities(track_id)
+                video_needed = bool(resolved.video_streams) and not (
+                    await cache_store.get_local_videos(track_id)
+                )
+                if audio_needed:
+                    await self._download_stream(
+                        track_id, resolved.audio_streams[-1], meta, "audio"
+                    )
+                if video_needed:
+                    # 同一曲目的两个请求之间也保持间隔,避免连续访问 CDN
+                    await asyncio.sleep(TASK_INTERVAL)
+                    await self._download_stream(
+                        track_id, resolved.video_streams[-1], meta, "video"
+                    )
                 return
             except asyncio.CancelledError:
                 raise
@@ -165,13 +203,13 @@ class DownloadManager:
                 last_err = e
         raise last_err or RuntimeError("下载失败")
 
-    async def _download_stream(self, track_id: str, stream, meta: dict) -> None:
-        """流式下载 CDN 音频到临时文件,成功后改名入库。"""
+    async def _download_stream(self, track_id: str, stream, meta: dict, kind: str) -> None:
+        """流式下载 CDN 媒体到临时文件,成功后改名入库。kind: audio / video。"""
         token = stream.stream_url.rsplit("/", 1)[-1]
         urls = get_stream_urls(token)
         if not urls:
             raise ValueError("无法获取流地址")
-        tmp = cache_store.tmp_path(track_id, stream.quality_id)
+        tmp = cache_store.tmp_path(track_id, stream.quality_id, kind)
         tmp.parent.mkdir(parents=True, exist_ok=True)
         headers = {"User-Agent": BROWSER_UA, "Referer": REFERER}
 
@@ -194,7 +232,9 @@ class DownloadManager:
                     # 下载成功:去掉 .part 后缀落位,再更新 meta
                     final = tmp.with_name(tmp.name.removesuffix(".part"))
                     os.replace(tmp, final)
-                    await cache_store.save_downloaded(track_id, stream.quality_id, meta)
+                    await cache_store.save_downloaded(
+                        track_id, stream.quality_id, meta, kind
+                    )
                     return
                 except asyncio.CancelledError:
                     raise

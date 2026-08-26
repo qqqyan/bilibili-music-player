@@ -1,7 +1,8 @@
-"""本地音频缓存存储层。
+"""本地音频/视频缓存存储层。
 
 目录结构:
   data/cache/{track_id}/q{quality_id}.m4a   音频文件
+  data/cache/{track_id}/v{quality_id}.mp4   视频文件(MV 画面)
   data/cache/{track_id}/meta.json           元数据 + 已缓存档位
 """
 
@@ -29,9 +30,20 @@ QUALITY_LABELS = {
 # 音质高低顺序(低 -> 高),用于「本地音质是否满足期望档」的判断
 QUALITY_ORDER = [0, 30216, 30232, 30280, 30251, 30250]
 
+# 视频画质枚举值 -> 标签(仅用于展示)
+VIDEO_QUALITY_LABELS = {
+    6: "240P", 16: "360P", 32: "480P", 64: "720P", 74: "720P60",
+    80: "1080P", 112: "1080P+", 116: "1080P60", 120: "4K",
+    125: "HDR", 126: "杜比", 127: "8K",
+}
+
 
 def quality_label(quality_id: int) -> str:
     return QUALITY_LABELS.get(quality_id, str(quality_id))
+
+
+def video_quality_label(quality_id: int) -> str:
+    return VIDEO_QUALITY_LABELS.get(quality_id, str(quality_id))
 
 
 def _track_dir(track_id: str) -> Path:
@@ -60,54 +72,80 @@ def _write_meta(track_id: str, meta: dict) -> None:
     )
 
 
-def _file_path(track_id: str, quality_id: int) -> Path:
-    return _track_dir(track_id) / f"q{quality_id}.m4a"
+def _file_path(track_id: str, quality_id: int, kind: str = "audio") -> Path:
+    prefix, ext = ("v", ".mp4") if kind == "video" else ("q", ".m4a")
+    return _track_dir(track_id) / f"{prefix}{quality_id}{ext}"
 
 
-def _scan_local_qualities(track_id: str) -> list[dict]:
-    """扫描磁盘上实际存在的音频文件(meta.json 可能滞后,以文件为准)。"""
+def _scan_local_media(track_id: str, kind: str) -> list[dict]:
+    """扫描磁盘上实际存在的媒体文件(meta.json 可能滞后,以文件为准)。"""
     dir_path = _track_dir(track_id)
     if not dir_path.exists():
         return []
+    prefix, ext = ("v", ".mp4") if kind == "video" else ("q", ".m4a")
     result = []
-    for f in sorted(dir_path.glob("q*.m4a")):
+    for f in sorted(dir_path.glob(f"{prefix}*{ext}")):
         try:
-            quality_id = int(f.stem.removeprefix("q"))
+            quality_id = int(f.stem.removeprefix(prefix))
         except ValueError:
             continue
+        label = (
+            video_quality_label(quality_id)
+            if kind == "video"
+            else quality_label(quality_id)
+        )
         result.append(
             {
                 "quality_id": quality_id,
-                "quality": quality_label(quality_id),
+                "quality": label,
                 "file_size": f.stat().st_size,
             }
         )
-    # 按音质从低到高排序(数值大小与音质高低不完全一致,需按顺序表)
-    result.sort(
-        key=lambda q: QUALITY_ORDER.index(q["quality_id"])
-        if q["quality_id"] in QUALITY_ORDER
-        else len(QUALITY_ORDER)
-    )
+    if kind == "audio":
+        # 按音质从低到高排序(数值大小与音质高低不完全一致,需按顺序表)
+        result.sort(
+            key=lambda q: QUALITY_ORDER.index(q["quality_id"])
+            if q["quality_id"] in QUALITY_ORDER
+            else len(QUALITY_ORDER)
+        )
+    else:
+        # 视频画质枚举值恰与画质正相关,数值排序即可
+        result.sort(key=lambda q: q["quality_id"])
     return result
+
+
+def _scan_local_qualities(track_id: str) -> list[dict]:
+    return _scan_local_media(track_id, "audio")
+
+
+def _scan_local_videos(track_id: str) -> list[dict]:
+    return _scan_local_media(track_id, "video")
 
 
 # ---------------------------------------------------------------- 同步底层操作
 
 
-def _save_file_sync(track_id: str, quality_id: int, meta: dict) -> Path:
-    """保存音频文件 + 更新 meta(下载完成时调用)。"""
+def _save_file_sync(track_id: str, quality_id: int, meta: dict, kind: str = "audio") -> Path:
+    """保存媒体文件 + 更新 meta(下载完成时调用)。kind: audio / video。"""
     dir_path = _track_dir(track_id)
     dir_path.mkdir(parents=True, exist_ok=True)
     old = _read_meta(track_id) or {}
     old.update(meta)
-    old.setdefault("qualities", {})
-    old["qualities"][str(quality_id)] = {
-        "file": f"q{quality_id}.m4a",
-        "downloaded_at": int(time.time()),
-    }
+    if kind == "video":
+        old.setdefault("videos", {})
+        old["videos"][str(quality_id)] = {
+            "file": f"v{quality_id}.mp4",
+            "downloaded_at": int(time.time()),
+        }
+    else:
+        old.setdefault("qualities", {})
+        old["qualities"][str(quality_id)] = {
+            "file": f"q{quality_id}.m4a",
+            "downloaded_at": int(time.time()),
+        }
     old["updated_at"] = int(time.time())
     _write_meta(track_id, old)
-    return _file_path(track_id, quality_id)
+    return _file_path(track_id, quality_id, kind)
 
 
 def _delete_sync(track_id: str) -> None:
@@ -149,10 +187,15 @@ async def get_local_qualities(track_id: str) -> list[dict]:
         return await asyncio.to_thread(_scan_local_qualities, track_id)
 
 
-async def open_local_file(track_id: str, quality_id: int) -> Path | None:
-    """返回本地音频文件路径(不存在返回 None)。"""
+async def get_local_videos(track_id: str) -> list[dict]:
     async with _lock:
-        path = _file_path(track_id, quality_id)
+        return await asyncio.to_thread(_scan_local_videos, track_id)
+
+
+async def open_local_file(track_id: str, quality_id: int, kind: str = "audio") -> Path | None:
+    """返回本地媒体文件路径(不存在返回 None)。kind: audio / video。"""
+    async with _lock:
+        path = _file_path(track_id, quality_id, kind)
 
         def _check():
             return path if path.exists() else None
@@ -160,9 +203,9 @@ async def open_local_file(track_id: str, quality_id: int) -> Path | None:
         return await asyncio.to_thread(_check)
 
 
-async def save_downloaded(track_id: str, quality_id: int, meta: dict) -> Path:
+async def save_downloaded(track_id: str, quality_id: int, meta: dict, kind: str = "audio") -> Path:
     async with _lock:
-        return await asyncio.to_thread(_save_file_sync, track_id, quality_id, meta)
+        return await asyncio.to_thread(_save_file_sync, track_id, quality_id, meta, kind)
 
 
 async def delete_track(track_id: str) -> None:
@@ -185,6 +228,8 @@ async def cache_size() -> int:
     return await asyncio.to_thread(_cache_size_sync)
 
 
-def tmp_path(track_id: str, quality_id: int) -> Path:
-    """下载中的临时文件路径(下载完成后再改名入库)。"""
-    return _track_dir(track_id) / f"q{quality_id}.m4a.part"
+def tmp_path(track_id: str, quality_id: int, kind: str = "audio") -> Path:
+    """下载中的临时文件路径(下载完成后再改名入库)。kind: audio / video。"""
+    return _file_path(track_id, quality_id, kind).with_suffix(
+        ".m4a.part" if kind == "audio" else ".mp4.part"
+    )

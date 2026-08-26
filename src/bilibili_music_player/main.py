@@ -55,17 +55,14 @@ async def api_search(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.get("/api/resolve/{kind}/{track_id}", response_model=ResolvedTrack)
+@app.get("/api/resolve/{track_id}", response_model=ResolvedTrack)
 async def api_resolve(
-    kind: str,
     track_id: str,
     page_index: int = Query(0, ge=0, description="视频分 P 序号,从 0 开始"),
 ):
-    """解析曲目播放流(音频区直链 / 视频 DASH 音视频流)。"""
-    if kind not in ("audio", "video"):
-        raise HTTPException(status_code=400, detail=f"未知曲目类型: {kind}")
+    """解析 bilibili 视频播放流(DASH 音视频流)。"""
     try:
-        return await resolve_track(kind, track_id, page_index)
+        return await resolve_track(track_id, page_index)
     except ValueError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -97,26 +94,35 @@ async def api_cache_queue(req: QueueRequest):
 
 @app.get("/api/cache/status/{track_id}")
 async def api_cache_status(track_id: str):
-    """单曲缓存状态。"""
-    return download_manager.get_status(track_id)
+    """单曲缓存状态(实时查磁盘)。"""
+    return await download_manager.get_status(track_id)
 
 
 @app.get("/api/cache")
 async def api_cache_all():
     """全部缓存状态 + 缓存占用。"""
     return {
-        "items": download_manager.get_all_statuses(),
+        "items": await download_manager.get_all_statuses(),
         "total_size": await cache_store.cache_size(),
     }
 
 
 @app.get("/api/local/{track_id}")
 async def api_local_stream(track_id: str, quality_id: int = Query(..., description="音质档 ID")):
-    """播放本地缓存文件(支持 Range,拖动进度条)。"""
-    path = await cache_store.open_local_file(track_id, quality_id)
+    """播放本地缓存音频(支持 Range,拖动进度条)。"""
+    path = await cache_store.open_local_file(track_id, quality_id, "audio")
     if path is None:
         raise HTTPException(status_code=404, detail="本地无该音质档缓存")
     return FileResponse(path, media_type="audio/mp4")
+
+
+@app.get("/api/local/{track_id}/video")
+async def api_local_video(track_id: str, quality_id: int = Query(..., description="画质档 ID")):
+    """播放本地缓存视频画面(支持 Range)。"""
+    path = await cache_store.open_local_file(track_id, quality_id, "video")
+    if path is None:
+        raise HTTPException(status_code=404, detail="本地无该画质档缓存")
+    return FileResponse(path, media_type="video/mp4")
 
 
 @app.delete("/api/cache/{track_id}")

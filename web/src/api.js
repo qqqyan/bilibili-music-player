@@ -20,9 +20,9 @@ export function searchTracks(keyword, page = 1) {
   return request(`/api/search?keyword=${encodeURIComponent(keyword)}&page=${page}`);
 }
 
-/** 解析曲目播放流,kind: video | audio,id: bv... / au... */
-export function resolveTrack(kind, id) {
-  return request(`/api/resolve/${kind}/${id}`);
+/** 解析 bilibili 视频播放流(id: bvBVxxx) */
+export function resolveTrack(id) {
+  return request(`/api/resolve/${id}`);
 }
 
 /** 获取歌单(后端项目目录持久化) */
@@ -73,6 +73,11 @@ export function getAllCache() {
 /** 本地缓存文件的播放地址 */
 export function localStreamUrl(trackId, qualityId) {
   return `/api/local/${trackId}?quality_id=${qualityId}`;
+}
+
+/** 本地缓存视频画面的播放地址 */
+export function localVideoUrl(trackId, qualityId) {
+  return `/api/local/${trackId}/video?quality_id=${qualityId}`;
 }
 
 /** 删除单曲缓存 */

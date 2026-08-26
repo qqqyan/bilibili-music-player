@@ -12,7 +12,7 @@ import re
 # (播放策略之一:后端请求频控)
 _RESOLVE_SEMAPHORE = asyncio.Semaphore(2)
 
-from bilibili_api import audio, search, video
+from bilibili_api import search, video
 from bilibili_api.video import (
     AudioQuality,
     AudioStreamDownloadURL,
@@ -25,7 +25,7 @@ from bilibili_api.video import (
 )
 
 from .config import get_credential
-from .models import MvInfo, ResolvedTrack, SearchPage, StreamInfo, TrackInfo
+from .models import ResolvedTrack, SearchPage, StreamInfo, TrackInfo
 from .stream_proxy import REFERER, BROWSER_UA, register_stream, stream_token_url
 
 AUDIO_QUALITY_LABELS = {
@@ -80,16 +80,23 @@ def _first(data: dict, *keys, default=""):
     return default
 
 
-def _pick_mv_video_stream(streams: list[VideoStreamDownloadURL]) -> VideoStreamDownloadURL | None:
-    """为 MV 挑选视频流:浏览器最兼容的 AVC 优先,再按画质从高到低。"""
-    if not streams:
-        return None
-    for codec in (VideoCodecs.AVC, VideoCodecs.AV1, VideoCodecs.HEV):
-        candidates = [s for s in streams if s.video_codecs == codec]
-        if candidates:
-            candidates.sort(key=lambda s: s.video_quality.value, reverse=True)
-            return candidates[0]
-    return streams[0]
+# 视频编码兼容性排序:AVC(H.264)浏览器最兼容,同画质时排到更高优先级
+_CODEC_RANK = {
+    VideoCodecs.AVC: 0,
+    VideoCodecs.AV1: 1,
+    VideoCodecs.HEV: 2,
+}
+
+
+def _sort_video_streams(streams: list[VideoStreamDownloadURL]) -> list[VideoStreamDownloadURL]:
+    """视频流排序:按画质从低到高;同画质 AVC 排最后(默认选中最兼容)。"""
+    streams.sort(
+        key=lambda s: (
+            s.video_quality.value,
+            -_CODEC_RANK.get(s.video_codecs, 3),
+        )
+    )
+    return streams
 
 
 def _make_stream_info(quality_id: int, quality: str, mime: str, bandwidth: int,
@@ -148,7 +155,6 @@ async def search_tracks(keyword: str, page: int = 1) -> SearchPage:
 def _video_search_item_to_track(it: dict, source: str) -> TrackInfo:
     return TrackInfo(
         id=f"bv{it['bvid']}",
-        kind="video",
         title=_strip_em(_first(it, "title", "name")),
         artist=_first(it, "author", "uname", "up_name"),
         cover=_abs_url(_first(it, "pic", "cover")),
@@ -159,45 +165,13 @@ def _video_search_item_to_track(it: dict, source: str) -> TrackInfo:
 
 # ---------------------------------------------------------------- 解析
 
-async def resolve_track(kind: str, track_id: str, page_index: int = 0) -> ResolvedTrack:
-    """解析曲目播放流。kind: audio(au{auid}) / video(bv{bvid})。
+async def resolve_track(track_id: str, page_index: int = 0) -> ResolvedTrack:
+    """解析 bilibili 视频播放流(bvBVxxx)。
 
     经信号量限频:并发解析不超过 2 个,超出排队(防批量操作触发风控)。
     """
     async with _RESOLVE_SEMAPHORE:
-        if kind == "audio":
-            return await _resolve_audio(int(track_id.removeprefix("au")))
-        if kind == "video":
-            return await _resolve_video(track_id.removeprefix("bv"), page_index)
-    raise ValueError(f"未知曲目类型: {kind}")
-
-
-async def _resolve_audio(auid: int) -> ResolvedTrack:
-    """音频区:Audio.get_download_url 直接给出 CDN 直链(单音质档)。"""
-    cred = get_credential()
-    a = audio.Audio(auid, credential=cred)
-    info, url_data = await asyncio.gather(a.get_info(), a.get_download_url())
-    data = info or {}  # Api.result 已提取 data 字段
-    cdns = url_data.get("cdns") or []
-    if not cdns:
-        raise ValueError("未获取到音频流 URL(可能需登录或已下架)")
-    stream = _make_stream_info(
-        quality_id=0,
-        quality="标准",  # 音频区音质由接口固定(quality=2),不可选
-        mime="audio/mp4",
-        bandwidth=0,
-        urls=cdns,
-    )
-    return ResolvedTrack(
-        id=f"au{auid}",
-        kind="audio",
-        title=_first(data, "title", "name"),
-        artist=_first(data, "uname", "author"),
-        cover=_abs_url(_first(data, "cover", "pic")),
-        duration=_parse_duration(data.get("duration")),
-        source="bilibili 音频区",
-        audio_streams=[stream],
-    )
+        return await _resolve_video(track_id.removeprefix("bv"), page_index)
 
 
 async def _resolve_video(bvid: str, page_index: int) -> ResolvedTrack:
@@ -213,7 +187,7 @@ async def _resolve_video(bvid: str, page_index: int) -> ResolvedTrack:
 
     detecter = VideoDownloadURLDataDetecter(url_data)
 
-    # 单文件流(FLV/MP4):音视频一体
+    # 单文件流(FLV/MP4):音视频一体,音频与画面同源
     if detecter.check_flv_mp4_stream():
         streams = detecter.detect_all()
         if streams and isinstance(streams[0], MP4StreamDownloadURL):
@@ -223,7 +197,7 @@ async def _resolve_video(bvid: str, page_index: int) -> ResolvedTrack:
             )
             track = _build_video_track(data, page, bvid)
             track.audio_streams = [stream]
-            track.mv = MvInfo(video=stream, audio=stream)  # 同一文件即音画
+            track.video_streams = [stream]  # 同一文件即音画
             return track
         if streams and isinstance(streams[0], FLVStreamDownloadURL):
             # FLV 浏览器无法原生播放,尝试 html5 MP4 流
@@ -236,11 +210,11 @@ async def _resolve_video(bvid: str, page_index: int) -> ResolvedTrack:
                 )
                 track = _build_video_track(data, page, bvid)
                 track.audio_streams = [stream]
-                track.mv = MvInfo(video=stream, audio=stream)
+                track.video_streams = [stream]
                 return track
             raise ValueError("该视频仅有 FLV 流,暂不支持播放")
 
-    # DASH 音视频分离流
+    # DASH 音视频分离流:音频/视频各自为 peer,独立返回档位列表
     all_streams = detecter.detect()
     audio_streams = [s for s in all_streams if isinstance(s, AudioStreamDownloadURL)]
     video_streams = [s for s in all_streams if isinstance(s, VideoStreamDownloadURL)]
@@ -251,7 +225,8 @@ async def _resolve_video(bvid: str, page_index: int) -> ResolvedTrack:
         key=lambda s: AUDIO_QUALITY_ORDER.index(s.audio_quality)
         if s.audio_quality in AUDIO_QUALITY_ORDER else 0
     )
-    stream_infos = [
+    track = _build_video_track(data, page, bvid)
+    track.audio_streams = [
         _make_stream_info(
             quality_id=s.audio_quality.value,
             quality=AUDIO_QUALITY_LABELS.get(s.audio_quality, "未知"),
@@ -261,30 +236,16 @@ async def _resolve_video(bvid: str, page_index: int) -> ResolvedTrack:
         )
         for s in audio_streams
     ]
-
-    track = _build_video_track(data, page, bvid)
-    track.audio_streams = stream_infos
-
-    # MV:最优视频流 + 最佳音质音频流(前端 video/audio 双元素同步)
-    mv_video = _pick_mv_video_stream(video_streams)
-    if mv_video is not None:
-        mv_audio = audio_streams[-1]  # 已按音质升序,取最高
-        track.mv = MvInfo(
-            video=_make_stream_info(
-                quality_id=mv_video.video_quality.value,
-                quality=mv_video.video_quality.name.lstrip("_"),
-                mime=mv_video.mime_type,
-                bandwidth=mv_video.bandwidth,
-                urls=_stream_urls(mv_video),
-            ),
-            audio=_make_stream_info(
-                quality_id=mv_audio.audio_quality.value,
-                quality=AUDIO_QUALITY_LABELS.get(mv_audio.audio_quality, "未知"),
-                mime=mv_audio.mime_type,
-                bandwidth=mv_audio.bandwidth,
-                urls=_stream_urls(mv_audio),
-            ),
+    track.video_streams = [
+        _make_stream_info(
+            quality_id=s.video_quality.value,
+            quality=s.video_quality.name.lstrip("_"),
+            mime=s.mime_type,
+            bandwidth=s.bandwidth,
+            urls=_stream_urls(s),
         )
+        for s in _sort_video_streams(video_streams)
+    ]
     return track
 
 
@@ -295,7 +256,6 @@ def _build_video_track(data: dict, page: dict, bvid: str) -> ResolvedTrack:
         title = f"{data.get('title', '')} - {page['part']}"
     return ResolvedTrack(
         id=f"bv{bvid}",
-        kind="video",
         title=title,
         artist=_first(data.get("owner") or {}, "name", "uname"),
         cover=_abs_url(page.get("first_frame") or data.get("pic") or ""),

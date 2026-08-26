@@ -16,6 +16,14 @@ function cacheState(track) {
       <span class="count">{{ store.playlist.length }} 首</span>
       <button
         v-if="store.playlist.length"
+        class="head-btn"
+        title="下载全部未缓存曲目到本地"
+        @click="store.downloadAll()"
+      >
+        下载全部
+      </button>
+      <button
+        v-if="store.playlist.length"
         class="clear-btn"
         title="清空播放列表"
         @click="store.clearPlaylist()"
@@ -116,6 +124,15 @@ function cacheState(track) {
 .clear-btn:hover {
   color: #e56d6d;
   background: var(--hover);
+}
+.head-btn {
+  font-size: 12px;
+  color: var(--accent);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.head-btn:hover {
+  background: var(--accent-soft);
 }
 .empty {
   padding: 48px 16px;
