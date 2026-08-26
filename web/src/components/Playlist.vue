@@ -1,11 +1,19 @@
 <script setup>
+import { ref } from "vue";
 import { usePlayerStore } from "../stores/player";
 import { formatTime } from "../api";
+import DownloadDialog from "./DownloadDialog.vue";
 
 const store = usePlayerStore();
+const showDownloadDialog = ref(false);
 
 function cacheState(track) {
   return store.cacheStatus[track.id] || { state: "none", local_qualities: [] };
+}
+
+async function onDownloadConfirm({ audio, video }) {
+  showDownloadDialog.value = false;
+  await store.downloadAll(audio, video);
 }
 </script>
 
@@ -17,8 +25,8 @@ function cacheState(track) {
       <button
         v-if="store.playlist.length"
         class="head-btn"
-        title="下载全部未缓存曲目到本地"
-        @click="store.downloadAll()"
+        title="按所选档位下载全部曲目(缺档自动降级)"
+        @click="showDownloadDialog = true"
       >
         下载全部
       </button>
@@ -91,6 +99,12 @@ function cacheState(track) {
         </button>
       </div>
     </div>
+
+    <DownloadDialog
+      v-if="showDownloadDialog"
+      @close="showDownloadDialog = false"
+      @confirm="onDownloadConfirm"
+    />
   </div>
 </template>
 

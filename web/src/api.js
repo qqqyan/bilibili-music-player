@@ -49,12 +49,23 @@ export async function savePlaylist(items) {
   return res.json();
 }
 
-/** 批量加入下载队列(priority=true 时插队优先下载) */
-export async function queueCache(trackIds, priority = false) {
+/** 批量加入下载队列
+ *  priority: 插队;force: 跳过缓存检查;
+ *  desired_audio/video_quality: 期望档位(-1=最高,曲目没有该档自动降级) */
+export async function queueCache(
+  trackIds,
+  { priority = false, force = false, desired_audio = -1, desired_video = -1 } = {}
+) {
   const res = await fetch("/api/cache/queue", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ track_ids: trackIds, priority }),
+    body: JSON.stringify({
+      track_ids: trackIds,
+      priority,
+      force,
+      desired_audio_quality: desired_audio,
+      desired_video_quality: desired_video,
+    }),
   });
   if (!res.ok) throw new Error(`入队失败: ${res.statusText}`);
   return res.json();
@@ -78,6 +89,106 @@ export function localStreamUrl(trackId, qualityId) {
 /** 本地缓存视频画面的播放地址 */
 export function localVideoUrl(trackId, qualityId) {
   return `/api/local/${trackId}/video?quality_id=${qualityId}`;
+}
+
+/** 登录状态 */
+export function authStatus() {
+  return request("/api/auth/status");
+}
+
+/** 生成登录二维码(返回 session_id 与 PNG data URL) */
+export async function authQrcode() {
+  const res = await fetch("/api/auth/qrcode", { method: "POST" });
+  if (!res.ok) throw new Error(`生成二维码失败: ${res.statusText}`);
+  return res.json();
+}
+
+/** 轮询二维码登录状态 */
+export function authQrcodeStatus(sessionId) {
+  return request(`/api/auth/qrcode/status/${sessionId}`);
+}
+
+/** 登出 */
+export async function authLogout() {
+  const res = await fetch("/api/auth/logout", { method: "POST" });
+  if (!res.ok) throw new Error(`登出失败: ${res.statusText}`);
+  return res.json();
+}
+
+/** 密码登录第一步:创建极验验证页(返回内嵌用 URL) */
+export async function passwordPrepare() {
+  const res = await fetch("/api/auth/password/prepare", { method: "POST" });
+  if (!res.ok) throw new Error(`创建验证码失败: ${res.statusText}`);
+  return res.json();
+}
+
+/** 轮询人机验证是否完成 */
+export function passwordGeetestStatus(sessionId) {
+  return request(`/api/auth/password/geetest-status/${sessionId}`);
+}
+
+/** 密码登录第二步:人机验证完成后提交账号密码 */
+export async function passwordLogin(form) {
+  const res = await fetch("/api/auth/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(form),
+  });
+  let body = {};
+  try {
+    body = await res.json();
+  } catch {
+    /* 忽略非 JSON 错误体 */
+  }
+  if (!res.ok) throw new Error(body.detail || `登录失败: ${res.statusText}`);
+  return body;
+}
+
+/** 手动填写凭证登录(从浏览器 Cookie 复制) */
+export async function authCredential(form) {
+  const res = await fetch("/api/auth/credential", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(form),
+  });
+  let body = {};
+  try {
+    body = await res.json();
+  } catch {
+    /* 忽略非 JSON 错误体 */
+  }
+  if (!res.ok) throw new Error(body.detail || `登录失败: ${res.statusText}`);
+  return body;
+}
+
+/** 应用设置 */
+export function getSettings() {
+  return request("/api/settings");
+}
+
+/** 合并保存设置(只更新传入字段) */
+export async function saveSettings(patch) {
+  const res = await fetch("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`保存设置失败: ${res.statusText}`);
+  return res.json();
+}
+
+/** 清空全部本地缓存 */
+export async function clearCache() {
+  const res = await fetch("/api/cache", { method: "DELETE" });
+  if (!res.ok) throw new Error(`清空失败: ${res.statusText}`);
+  return res.json();
+}
+
+/** 遍历全部缓存,每首只保留音频/视频最高档 */
+export async function cleanupCache() {
+  const res = await fetch("/api/cache/cleanup", { method: "POST" });
+  if (!res.ok) throw new Error(`清理失败: ${res.statusText}`);
+  return res.json();
 }
 
 /** 删除单曲缓存 */

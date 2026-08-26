@@ -7,10 +7,11 @@
 """
 
 import os
-from functools import lru_cache
 from pathlib import Path
 
 from bilibili_api.utils.network import Credential
+
+from . import auth_store
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -28,10 +29,33 @@ def _load_dotenv(path: Path | None = None) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
-@lru_cache(maxsize=1)
+_credential_cache: Credential | None = None
+
+
 def get_credential() -> Credential:
-    """构建 Credential,未配置登录态时为空凭证(匿名访问)。"""
+    """当前生效的 Credential(内存缓存,登录/登出后热更新)。
+
+    优先级:data/auth.json(前端登录) > .env(手动配置) > 匿名空凭证。
+    """
+    global _credential_cache
+    if _credential_cache is None:
+        _credential_cache = _build_credential()
+    return _credential_cache
+
+
+def refresh_credential() -> Credential:
+    """登录态变更后重建凭证并清除缓存。"""
+    global _credential_cache
+    _credential_cache = None
+    return get_credential()
+
+
+def _build_credential() -> Credential:
     _load_dotenv()
+    record = auth_store.load_auth()
+    if record:
+        fields = auth_store.credentials_from_record(record)
+        return Credential(**fields)
     return Credential(
         sessdata=os.environ.get("BILI_SESSDATA", ""),
         bili_jct=os.environ.get("BILI_BILI_JCT", ""),

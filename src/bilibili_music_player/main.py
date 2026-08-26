@@ -10,9 +10,9 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import cache_store
+from . import auth, cache_store, settings_store
 from .bilibili_client import resolve_track, search_tracks
-from .config import configure_client
+from .config import configure_client, is_logged_in
 from .download_manager import manager as download_manager
 from .models import ResolvedTrack, SearchPage, TrackInfo
 from .playlist_store import get_playlist, save_playlist
@@ -24,11 +24,16 @@ async def lifespan(_: FastAPI):
     # 事件循环内初始化 zoku 客户端:开启 curl_cffi 浏览器伪装
     configure_client()
     await download_manager.start()
+    # 已登录时启动检查凭证有效性,过期自动续期
+    if is_logged_in():
+        await auth.try_refresh_credential()
     yield
     await download_manager.stop()
 
 
 app = FastAPI(title="bilibili-music-player", version="0.1.0", lifespan=lifespan)
+
+app.include_router(auth.router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -83,12 +88,24 @@ async def api_save_playlist(items: list[TrackInfo]):
 class QueueRequest(BaseModel):
     track_ids: list[str]
     priority: bool = False  # True 时插到队首(点播优先)
+    force: bool = False  # True 时按期望档检查补下
+    desired_audio_quality: int = -1  # 期望音质档 ID,-1 = 最高
+    desired_video_quality: int = -1  # 期望画质档 ID,-1 = 最高
 
 
 @app.post("/api/cache/queue")
 async def api_cache_queue(req: QueueRequest):
-    """批量加入下载队列(后台串行限频下载,已有缓存自动跳过)。"""
-    await download_manager.enqueue(req.track_ids, priority=req.priority)
+    """批量加入下载队列(后台串行限频下载)。
+
+    desired_* 指定期望档位(-1=最高):曲目没有该档时自动降级到其最好可用档。
+    """
+    await download_manager.enqueue(
+        req.track_ids,
+        priority=req.priority,
+        force=req.force,
+        desired_audio=req.desired_audio_quality,
+        desired_video=req.desired_video_quality,
+    )
     return {"queued": len(req.track_ids)}
 
 
@@ -125,6 +142,13 @@ async def api_local_video(track_id: str, quality_id: int = Query(..., descriptio
     return FileResponse(path, media_type="video/mp4")
 
 
+@app.post("/api/cache/cleanup")
+async def api_cache_cleanup():
+    """遍历全部缓存,每首只保留音频/视频的最高档,删除更低档。"""
+    removed = await cache_store.cleanup_all()
+    return {"removed": removed}
+
+
 @app.delete("/api/cache/{track_id}")
 async def api_cache_delete(track_id: str):
     """删除单曲缓存。"""
@@ -139,6 +163,18 @@ async def api_cache_clear():
     await cache_store.clear_all()
     await download_manager.refresh_all()
     return {"cleared": True}
+
+
+@app.get("/api/settings")
+async def api_get_settings():
+    """应用设置。"""
+    return settings_store.load_settings()
+
+
+@app.put("/api/settings")
+async def api_save_settings(patch: dict):
+    """合并保存设置(只更新传入字段)。"""
+    return settings_store.save_settings(patch)
 
 
 @app.get("/api/stream/{token}")

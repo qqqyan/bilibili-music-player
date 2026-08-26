@@ -51,10 +51,16 @@ cd web && npm install && npm run dev
 
 ## 登录(可选,获取更高音质)
 
-在项目根目录创建 `.env`(已在 .gitignore 中):
+**推荐:页面内登录**——点右上角「登录」按钮:
+- **扫码登录**:bilibili 手机 App 扫码确认(推荐)
+- **账号密码**:输入账号密码 + 完成人机验证(极验,SDK 动态加载自官方 CDN);密码仅用于本次请求不保存;触发二次验证(短信等)时请改用扫码
+- **手动填写**:从浏览器 Cookie 复制 SESSDATA 等字段(弹窗内有指引)
+
+登录凭证保存在项目目录 `data/auth.json`(已 gitignore),重启后保持;登录后自动解锁 Hi-Res/杜比音质与更高画质。
+
+**备选:`.env` 环境变量**(项目根目录,已 gitignore):
 
 ```bash
-# 从浏览器 Cookie 获取(bilibili.com 登录后 F12 → Application → Cookies)
 BILI_SESSDATA=xxxx
 BILI_BILI_JCT=xxxx
 BILI_BUVID3=xxxx
@@ -62,7 +68,7 @@ BILI_BUVID4=xxxx
 BILI_DEDEUSERID=xxxx
 ```
 
-不配置也能正常使用(匿名,音质上限 192K)。
+不配置也能正常使用(匿名,音质上限 192K / 画质 480P)。
 
 ## 生产模式
 

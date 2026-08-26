@@ -99,7 +99,7 @@ function onVideoQualityChange(e) {
             :key="s.quality_id"
             :value="i"
           >
-            {{ s.quality }}
+            {{ s.quality }}{{ s.local ? "·本地" : "" }}
           </option>
         </select>
         <select
@@ -115,7 +115,7 @@ function onVideoQualityChange(e) {
             :key="s.quality_id"
             :value="i"
           >
-            {{ s.quality }}
+            {{ s.quality }}{{ s.local ? "·本地" : "" }}
           </option>
         </select>
       </div>

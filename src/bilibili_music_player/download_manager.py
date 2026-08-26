@@ -24,7 +24,8 @@ RETRY_TIMES = 1
 
 class DownloadManager:
     def __init__(self) -> None:
-        self._queue: deque[str] = deque()
+        # 队列元素: {"track_id", "desired_audio", "desired_video"}
+        self._queue: deque[dict] = deque()
         self._states: dict[str, dict] = {}
         # track_id -> 本地已缓存档位(启动时扫描 + 下载完成后更新)
         self._local_index: dict[str, list[dict]] = {}
@@ -53,28 +54,42 @@ class DownloadManager:
 
     # ------------------------------------------------------------ 队列操作
 
-    async def enqueue(self, track_ids: list[str], priority: bool = False) -> None:
+    async def enqueue(
+        self,
+        track_ids: list[str],
+        priority: bool = False,
+        force: bool = False,
+        desired_audio: int = -1,
+        desired_video: int = -1,
+    ) -> None:
         """批量入队。已完整缓存 / 已在队列中的跳过;priority=True 插入队首。
 
-        缓存判定实时查磁盘(文件可能被外部删除,内存索引不可信);
-        音频已缓存但视频缺失(failed 重试或升级旧缓存)时允许入队补下。
+        force=True 时跳过缓存检查强制入队,worker 会解析远程档位,
+        按期望档(不存在则降级)只补下缺失的档。
         """
         for tid in track_ids:
-            local_audio = await cache_store.get_local_qualities(tid)
+            if not force:
+                local_audio = await cache_store.get_local_qualities(tid)
+                state = self._states.get(tid, {}).get("state")
+                if local_audio and state != "failed":
+                    # 本地缺视频 → 入队补下(兼容升级前只有音频的旧缓存)
+                    local_video = await cache_store.get_local_videos(tid)
+                    if local_video:
+                        self._mark_done(tid, local_audio)
+                        continue
+                    # 缺视频:落入下方入队逻辑
             state = self._states.get(tid, {}).get("state")
-            if local_audio and state != "failed":
-                # 本地缺视频 → 入队补下(兼容升级前只有音频的旧缓存)
-                local_video = await cache_store.get_local_videos(tid)
-                if local_video:
-                    self._mark_done(tid, local_audio)
-                    continue
-                # 缺视频:落入下方入队逻辑
             if state in ("pending", "downloading"):
                 continue
+            item = {
+                "track_id": tid,
+                "desired_audio": desired_audio,
+                "desired_video": desired_video,
+            }
             if priority:
-                self._queue.appendleft(tid)
+                self._queue.appendleft(item)
             else:
-                self._queue.append(tid)
+                self._queue.append(item)
             self._states[tid] = {"state": "pending", "error": None}
         if track_ids:
             self._wake.set()
@@ -100,13 +115,18 @@ class DownloadManager:
 
     async def prioritize(self, track_id: str) -> None:
         """点播优先:排队中的提到队首,failed 的重新排队。"""
-        if track_id in self._queue:
-            self._queue.remove(track_id)
-            self._queue.appendleft(track_id)
+        item = next(
+            (i for i in self._queue if i["track_id"] == track_id), None
+        )
+        if item is not None:
+            self._queue.remove(item)
+            self._queue.appendleft(item)
             self._wake.set()
         elif self._states.get(track_id, {}).get("state") == "failed":
             self._states[track_id] = {"state": "pending", "error": None}
-            self._queue.appendleft(track_id)
+            self._queue.appendleft(
+                {"track_id": track_id, "desired_audio": -1, "desired_video": -1}
+            )
             self._wake.set()
 
     # ------------------------------------------------------------ 状态查询
@@ -147,10 +167,11 @@ class DownloadManager:
                 self._wake.clear()
                 await self._wake.wait()
                 continue
-            tid = self._queue.popleft()
+            item = self._queue.popleft()
+            tid = item["track_id"]
             self._states[tid] = {"state": "downloading", "error": None}
             try:
-                await self._download_track(tid)
+                await self._download_track(tid, item["desired_audio"], item["desired_video"])
                 self._states[tid] = {"state": "done", "error": None}
                 self._local_index[tid] = await cache_store.get_local_qualities(tid)
                 print(f"[download] 完成: {tid}", flush=True)
@@ -162,11 +183,8 @@ class DownloadManager:
             # 控频:任务间固定间隔
             await asyncio.sleep(TASK_INTERVAL)
 
-    async def _download_track(self, track_id: str) -> None:
-        """解析曲目,下载缺失的音频(最高档)/ 视频(最高画质)落盘。失败自动重试。
-
-        音频与视频独立判断缺失:音频是核心(播放必需),视频是增强(MV 画面)。
-        """
+    async def _download_track(self, track_id: str, desired_audio: int, desired_video: int) -> None:
+        """解析曲目,按期望档(不存在则降级到其最好档)补下缺失的音频/视频。失败自动重试。"""
         last_err: Exception | None = None
         for attempt in range(RETRY_TIMES + 1):
             if attempt > 0:
@@ -178,30 +196,44 @@ class DownloadManager:
                     "artist": resolved.artist,
                     "cover": resolved.cover,
                     "duration": resolved.duration,
-                    "kind": resolved.kind,
                     "source": resolved.source,
                     "has_video": bool(resolved.video_streams),
                 }
-                audio_needed = not await cache_store.get_local_qualities(track_id)
-                video_needed = bool(resolved.video_streams) and not (
-                    await cache_store.get_local_videos(track_id)
+                local_audio = await cache_store.get_local_qualities(track_id)
+                local_video = await cache_store.get_local_videos(track_id)
+                audio_stream = _pick_desired_stream(
+                    resolved.audio_streams, desired_audio, "audio"
+                )
+                video_stream = _pick_desired_stream(
+                    resolved.video_streams, desired_video, "video"
+                )
+                audio_needed = audio_stream is not None and not any(
+                    q["quality_id"] == audio_stream.quality_id for q in local_audio
+                )
+                video_needed = video_stream is not None and not any(
+                    q["quality_id"] == video_stream.quality_id for q in local_video
                 )
                 if audio_needed:
-                    await self._download_stream(
-                        track_id, resolved.audio_streams[-1], meta, "audio"
-                    )
+                    await self._download_stream(track_id, audio_stream, meta, "audio")
+                    await self._maybe_cleanup_lower(track_id, "audio", audio_stream.quality_id)
                 if video_needed:
                     # 同一曲目的两个请求之间也保持间隔,避免连续访问 CDN
                     await asyncio.sleep(TASK_INTERVAL)
-                    await self._download_stream(
-                        track_id, resolved.video_streams[-1], meta, "video"
-                    )
+                    await self._download_stream(track_id, video_stream, meta, "video")
+                    await self._maybe_cleanup_lower(track_id, "video", video_stream.quality_id)
                 return
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 last_err = e
         raise last_err or RuntimeError("下载失败")
+
+    async def _maybe_cleanup_lower(self, track_id: str, kind: str, quality_id: int) -> None:
+        """设置开启「自动清理旧档」时,删除刚下载档位以下的旧缓存。"""
+        from . import settings_store
+
+        if settings_store.load_settings().get("cleanup_old_quality"):
+            await cache_store.cleanup_lower(track_id, kind, quality_id)
 
     async def _download_stream(self, track_id: str, stream, meta: dict, kind: str) -> None:
         """流式下载 CDN 媒体到临时文件,成功后改名入库。kind: audio / video。"""
@@ -244,6 +276,35 @@ class DownloadManager:
         if tmp.exists():
             tmp.unlink(missing_ok=True)
         raise last_err or RuntimeError("所有 CDN 下载失败")
+
+
+def _pick_desired_stream(streams: list, desired_id: int, kind: str):
+    """期望档选择:存在则用;否则降级到不高于期望档的最好档。
+
+    desired_id: -1 = 最高; -2 = 跳过该类型(不下载)。
+    """
+    if not streams:
+        return None
+    if desired_id == -2:
+        return None
+    if desired_id <= 0:
+        return streams[-1]
+    for s in streams:
+        if s.quality_id == desired_id:
+            return s
+    # 降级:不高于期望档的最高档(音质按顺序表,视频按数值)
+    if kind == "video":
+        lower = [s for s in streams if s.quality_id <= desired_id]
+    else:
+        order = cache_store.QUALITY_ORDER
+        want = order.index(desired_id) if desired_id in order else len(order)
+        lower = [
+            s
+            for s in streams
+            if (order.index(s.quality_id) if s.quality_id in order else len(order))
+            <= want
+        ]
+    return lower[-1] if lower else streams[0]
 
 
 # 全局单例
