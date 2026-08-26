@@ -112,9 +112,7 @@ export const usePlayerStore = defineStore("player", {
         this.playlist = loadJson(LS_KEY, []);
         this.error = "无法连接后端,已加载本地缓存的歌单";
       }
-      // 歌单内未缓存的曲目批量补齐(后台控频下载,已缓存自动跳过)
-      const ids = this.playlist.map((t) => t.id);
-      if (ids.length) queueCache(ids).catch(() => {});
+      // 策略 A:启动时不自动下载,播放过才下载;「下载全部」按钮手动触发
       await this.refreshCacheStatus();
     },
 
@@ -148,15 +146,7 @@ export const usePlayerStore = defineStore("player", {
       if (this.playlist.some((t) => t.id === track.id)) return false; // 已存在
       this.playlist.push(track);
       this._savePlaylist();
-      // 自动加入后台下载队列(串行限频,已缓存的会自动跳过)
-      queueCache([track.id])
-        .then(() => {
-          this.cacheStatus[track.id] = {
-            state: "pending",
-            local_qualities: [],
-          };
-        })
-        .catch(() => {});
+      // 策略 A:不自动下载,播放过才会下载(见 playTrack)
       return true;
     },
 
@@ -427,6 +417,23 @@ export const usePlayerStore = defineStore("player", {
         ...(this.cacheStatus[trackId] || {}),
         state: "pending",
       };
+    },
+
+    /** 策略 B:手动下载全部(已缓存的自动跳过,串行限频) */
+    async downloadAll() {
+      const ids = this.playlist.map((t) => t.id);
+      if (!ids.length) return;
+      await queueCache(ids).catch(() => {});
+      for (const id of ids) {
+        this.cacheStatus[id] = {
+          ...(this.cacheStatus[id] || {}),
+          state: this.cacheStatus[id]?.local_qualities?.length
+            ? "done"
+            : "pending",
+          local_qualities: this.cacheStatus[id]?.local_qualities || [],
+        };
+      }
+      await this.refreshCacheStatus();
     },
 
     /** 删除单曲本地缓存 */
