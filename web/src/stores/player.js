@@ -196,13 +196,13 @@ export const usePlayerStore = defineStore("player", {
       }
     },
 
-    /** 入队下载并立即同步状态:乐观标记 pending,再拉真实状态(下载中/已跳过等) */
+    /** 入队下载并立即同步状态:乐观标记 checking(检查中),再拉真实状态 */
     async _queueCache(ids, options = {}) {
       await queueCache(ids, options).catch(() => {});
       for (const id of ids) {
         this.cacheStatus[id] = {
           ...(this.cacheStatus[id] || {}),
-          state: "pending",
+          state: "checking",
           local_qualities: this.cacheStatus[id]?.local_qualities || [],
         };
       }
@@ -269,6 +269,12 @@ export const usePlayerStore = defineStore("player", {
       // 点击正在播放的曲目:不打断播放(播放时已自动检查档位)
       if (index === this.currentIndex && this.resolved) {
         return;
+      }
+      // 点播优先:曲目在下载队列中(检查中/待下载/下载中)时立即提队首,
+      // 不等待后续异步检查(不阻塞播放)
+      const st = this.cacheStatus[track.id]?.state;
+      if (st === "checking" || st === "pending" || st === "downloading") {
+        this._queueCache([track.id], { priority: true });
       }
       if (record && this.currentIndex >= 0 && index !== this.currentIndex) {
         this._history.push(this.currentIndex); // 记住来的地方
@@ -632,7 +638,9 @@ export const usePlayerStore = defineStore("player", {
       };
     },
 
-    /** 策略 B:手动下载全部,按期望档位(-1=最高;曲目无该档自动降级)。串行限频。 */
+    /** 策略 B:手动下载全部,按期望档位(-1=最高;曲目无该档自动降级)。
+     *  按下后列表状态保持不动,后端并发快速检查,检查完成后一次刷新:
+     *  需要下载的显示下载中/待下载,其余保持绿勾。 */
     async downloadAll(desiredAudio = -1, desiredVideo = -1) {
       const ids = this.playlist.map((t) => t.id);
       if (!ids.length) return;
@@ -641,16 +649,19 @@ export const usePlayerStore = defineStore("player", {
         desired_audio: desiredAudio,
         desired_video: desiredVideo,
       }).catch(() => {});
-      for (const id of ids) {
-        this.cacheStatus[id] = {
-          ...(this.cacheStatus[id] || {}),
-          state: this.cacheStatus[id]?.local_qualities?.length
-            ? "done"
-            : "pending",
-          local_qualities: this.cacheStatus[id]?.local_qualities || [],
-        };
+      await this._pollUntilChecked();
+    },
+
+    /** 检查阶段快速轮询(1s),全部离开 checking 后停(恢复常规 2s 轮询) */
+    async _pollUntilChecked() {
+      for (let i = 0; i < 180; i++) {
+        await this.refreshCacheStatus();
+        const hasChecking = Object.values(this.cacheStatus).some(
+          (s) => s.state === "checking"
+        );
+        if (!hasChecking) return;
+        await new Promise((r) => setTimeout(r, 1000));
       }
-      await this.refreshCacheStatus();
     },
 
     /** 每次播放后异步检查远程档位并合并进下拉(失败静默)。
