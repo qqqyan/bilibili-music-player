@@ -1,0 +1,29 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Node
+node_modules/
+web/dist/
+
+# 凭证与本地配置(勿提交登录态)
+.env
+
+# 歌单等本地用户数据
+data/
+
+# IDE 配置(含本地路径,不进仓库)
+.idea/
+
+# 与项目无关的本地知识库索引
+.joydesk/
+
+# 系统文件
+.DS_Store

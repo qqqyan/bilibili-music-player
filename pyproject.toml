@@ -1,0 +1,27 @@
+[project]
+name = "bilibili-music-player"
+version = "0.1.0"
+description = "从 bilibili 获取音频的 web 音乐播放器"
+readme = "README.md"
+authors = [
+    { name = "shaomingyang.10", email = "shaomingyang.10@jd.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "bilibili-api-zoku",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "httpx>=0.28.1",
+    "curl-cffi>=0.7.0",
+]
+
+[project.scripts]
+bilibili-music-player = "bilibili_music_player:main"
+
+[tool.uv.sources]
+# 使用本地 fork 的 bilibili-api-zoku(原仓库已归档,此 fork 持续维护)
+bilibili-api-zoku = { path = "../bilibili-api-zoku", editable = true }
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
