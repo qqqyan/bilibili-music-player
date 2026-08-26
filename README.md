@@ -33,7 +33,7 @@ src/            FastAPI 后端
   └─ config.py            登录凭证加载(.env)
 ```
 
-后端依赖本地 fork 的 [bilibili-api-zoku](https://github.com/qqqyan/bilibili-api-zoku)(`../bilibili-api-zoku`,editable 安装)。
+后端依赖上游维护版 [bilibili-api-zoku](https://github.com/bromothymolb/bilibili-api-zoku),通过 GitHub archive tarball 固定 commit 安装(绕开 git 协议,国内网络友好;升级时更新 `pyproject.toml` 中的 commit hash)。
 
 ## 快速开始
 

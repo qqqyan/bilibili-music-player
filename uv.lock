@@ -61,7 +61,8 @@ wheels = [
 
 [[package]]
 name = "bilibili-api-zoku"
-source = { editable = "../bilibili-api-zoku" }
+version = "17.4.4"
+source = { url = "https://github.com/bromothymolb/bilibili-api-zoku/archive/a0a1566c7c462ab57a3891c3a5f12976cbd11e9e.tar.gz" }
 dependencies = [
     { name = "apscheduler" },
     { name = "beautifulsoup4" },
@@ -76,6 +77,7 @@ dependencies = [
     { name = "qrcode-terminal" },
     { name = "yarl" },
 ]
+sdist = { hash = "sha256:9bd540e0c9a534b4ba794524bf09f2c69db47a6a388835970b83705f61d3edb1" }
 
 [package.metadata]
 requires-dist = [
@@ -107,7 +109,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bilibili-api-zoku", editable = "../bilibili-api-zoku" },
+    { name = "bilibili-api-zoku", url = "https://github.com/bromothymolb/bilibili-api-zoku/archive/a0a1566c7c462ab57a3891c3a5f12976cbd11e9e.tar.gz" },
     { name = "curl-cffi", specifier = ">=0.7.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.28.1" },
