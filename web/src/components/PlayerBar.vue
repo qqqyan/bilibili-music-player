@@ -29,10 +29,14 @@ function cycleMode() {
 
 const currentMode = computed(() => MODES.find((m) => m.id === store.mode));
 const volumePct = computed(() => store.volume * 100);
-const hasMv = computed(() => !!store.resolved?.mv);
+// 视频类型曲目即可尝试 MV(本地缓存模式下点击时远程解析画面)
+const hasMv = computed(() => store.currentTrack?.kind === "video");
 
 function onQualityChange(e) {
   store.setQuality(Number(e.target.value));
+}
+function onVideoQualityChange(e) {
+  store.setVideoQuality(Number(e.target.value));
 }
 </script>
 
@@ -79,7 +83,7 @@ function onQualityChange(e) {
         <button
           class="icon-btn"
           :class="{ active: store.mvEnabled, disabled: !hasMv }"
-          :title="hasMv ? 'MV 画面' : '该曲目无 MV'"
+          :title="hasMv ? 'MV 画面' : '音频区曲目无 MV'"
           @click="store.toggleMv()"
         >
           MV
@@ -94,6 +98,22 @@ function onQualityChange(e) {
           <option :value="-1">自动(最高)</option>
           <option
             v-for="(s, i) in store.resolved.audio_streams"
+            :key="s.quality_id"
+            :value="i"
+          >
+            {{ s.quality }}
+          </option>
+        </select>
+        <select
+          v-if="store.resolved?.video_streams?.length"
+          class="quality"
+          :value="store.videoIndex"
+          title="画质"
+          @change="onVideoQualityChange"
+        >
+          <option :value="-1">画面自动(最高)</option>
+          <option
+            v-for="(s, i) in store.resolved.video_streams"
             :key="s.quality_id"
             :value="i"
           >

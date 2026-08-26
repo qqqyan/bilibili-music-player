@@ -112,11 +112,20 @@ async def api_cache_all():
 
 @app.get("/api/local/{track_id}")
 async def api_local_stream(track_id: str, quality_id: int = Query(..., description="音质档 ID")):
-    """播放本地缓存文件(支持 Range,拖动进度条)。"""
-    path = await cache_store.open_local_file(track_id, quality_id)
+    """播放本地缓存音频(支持 Range,拖动进度条)。"""
+    path = await cache_store.open_local_file(track_id, quality_id, "audio")
     if path is None:
         raise HTTPException(status_code=404, detail="本地无该音质档缓存")
     return FileResponse(path, media_type="audio/mp4")
+
+
+@app.get("/api/local/{track_id}/video")
+async def api_local_video(track_id: str, quality_id: int = Query(..., description="画质档 ID")):
+    """播放本地缓存视频画面(支持 Range)。"""
+    path = await cache_store.open_local_file(track_id, quality_id, "video")
+    if path is None:
+        raise HTTPException(status_code=404, detail="本地无该画质档缓存")
+    return FileResponse(path, media_type="video/mp4")
 
 
 @app.delete("/api/cache/{track_id}")

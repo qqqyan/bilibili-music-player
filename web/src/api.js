@@ -75,6 +75,11 @@ export function localStreamUrl(trackId, qualityId) {
   return `/api/local/${trackId}?quality_id=${qualityId}`;
 }
 
+/** 本地缓存视频画面的播放地址 */
+export function localVideoUrl(trackId, qualityId) {
+  return `/api/local/${trackId}/video?quality_id=${qualityId}`;
+}
+
 /** 删除单曲缓存 */
 export async function deleteCacheTrack(trackId) {
   const res = await fetch(`/api/cache/${trackId}`, { method: "DELETE" });

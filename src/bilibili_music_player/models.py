@@ -25,18 +25,14 @@ class StreamInfo(BaseModel):
     stream_url: str  # /api/stream/{token}
 
 
-class MvInfo(BaseModel):
-    """MV 画面信息:视频流 + 配套音频流(前端 video/audio 双元素同步播放)。"""
-
-    video: StreamInfo
-    audio: StreamInfo
-
-
 class ResolvedTrack(TrackInfo):
-    """解析后的曲目:元数据 + 全部可用音频音质档 + 可选 MV。"""
+    """解析后的曲目:元数据 + 音频音质档 + 视频画质档(两者对称,均为 peer)。
+
+    音频/视频档位均按质量从低到高排列;视频条目才可能有 video_streams。
+    """
 
     audio_streams: list[StreamInfo]  # 音频档位,按音质从低到高
-    mv: MvInfo | None = None  # 视频条目可提供 MV 画面
+    video_streams: list[StreamInfo] = []  # 视频档位,按画质从低到高(无画面时为空)
 
 
 class SearchPage(BaseModel):
