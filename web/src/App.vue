@@ -91,6 +91,15 @@ async function loadMore() {
     searching.value = false;
   }
 }
+
+/** 回退主页:清空搜索结果与关键词,主区回到初始状态 */
+function clearSearch() {
+  results.value = [];
+  keyword.value = "";
+  hasMore.value = false;
+  searchError.value = "";
+  page.value = 1;
+}
 </script>
 
 <template>
@@ -100,7 +109,12 @@ async function loadMore() {
         <span class="brand-dot"></span>
         bilibili 音乐播放器
       </div>
-      <SearchBar :loading="searching" @search="doSearch" />
+      <SearchBar
+        :loading="searching"
+        :has-results="results.length > 0 || !!keyword"
+        @search="doSearch"
+        @clear="clearSearch"
+      />
       <div class="auth-area">
         <template v-if="auth.logged_in">
           <img
