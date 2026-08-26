@@ -55,17 +55,14 @@ async def api_search(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.get("/api/resolve/{kind}/{track_id}", response_model=ResolvedTrack)
+@app.get("/api/resolve/{track_id}", response_model=ResolvedTrack)
 async def api_resolve(
-    kind: str,
     track_id: str,
     page_index: int = Query(0, ge=0, description="视频分 P 序号,从 0 开始"),
 ):
-    """解析曲目播放流(音频区直链 / 视频 DASH 音视频流)。"""
-    if kind not in ("audio", "video"):
-        raise HTTPException(status_code=400, detail=f"未知曲目类型: {kind}")
+    """解析 bilibili 视频播放流(DASH 音视频流)。"""
     try:
-        return await resolve_track(kind, track_id, page_index)
+        return await resolve_track(track_id, page_index)
     except ValueError as e:
         raise HTTPException(status_code=502, detail=str(e))
 

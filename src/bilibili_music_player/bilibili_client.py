@@ -12,7 +12,7 @@ import re
 # (播放策略之一:后端请求频控)
 _RESOLVE_SEMAPHORE = asyncio.Semaphore(2)
 
-from bilibili_api import audio, search, video
+from bilibili_api import search, video
 from bilibili_api.video import (
     AudioQuality,
     AudioStreamDownloadURL,
@@ -155,7 +155,6 @@ async def search_tracks(keyword: str, page: int = 1) -> SearchPage:
 def _video_search_item_to_track(it: dict, source: str) -> TrackInfo:
     return TrackInfo(
         id=f"bv{it['bvid']}",
-        kind="video",
         title=_strip_em(_first(it, "title", "name")),
         artist=_first(it, "author", "uname", "up_name"),
         cover=_abs_url(_first(it, "pic", "cover")),
@@ -166,45 +165,13 @@ def _video_search_item_to_track(it: dict, source: str) -> TrackInfo:
 
 # ---------------------------------------------------------------- 解析
 
-async def resolve_track(kind: str, track_id: str, page_index: int = 0) -> ResolvedTrack:
-    """解析曲目播放流。kind: audio(au{auid}) / video(bv{bvid})。
+async def resolve_track(track_id: str, page_index: int = 0) -> ResolvedTrack:
+    """解析 bilibili 视频播放流(bvBVxxx)。
 
     经信号量限频:并发解析不超过 2 个,超出排队(防批量操作触发风控)。
     """
     async with _RESOLVE_SEMAPHORE:
-        if kind == "audio":
-            return await _resolve_audio(int(track_id.removeprefix("au")))
-        if kind == "video":
-            return await _resolve_video(track_id.removeprefix("bv"), page_index)
-    raise ValueError(f"未知曲目类型: {kind}")
-
-
-async def _resolve_audio(auid: int) -> ResolvedTrack:
-    """音频区:Audio.get_download_url 直接给出 CDN 直链(单音质档)。"""
-    cred = get_credential()
-    a = audio.Audio(auid, credential=cred)
-    info, url_data = await asyncio.gather(a.get_info(), a.get_download_url())
-    data = info or {}  # Api.result 已提取 data 字段
-    cdns = url_data.get("cdns") or []
-    if not cdns:
-        raise ValueError("未获取到音频流 URL(可能需登录或已下架)")
-    stream = _make_stream_info(
-        quality_id=0,
-        quality="标准",  # 音频区音质由接口固定(quality=2),不可选
-        mime="audio/mp4",
-        bandwidth=0,
-        urls=cdns,
-    )
-    return ResolvedTrack(
-        id=f"au{auid}",
-        kind="audio",
-        title=_first(data, "title", "name"),
-        artist=_first(data, "uname", "author"),
-        cover=_abs_url(_first(data, "cover", "pic")),
-        duration=_parse_duration(data.get("duration")),
-        source="bilibili 音频区",
-        audio_streams=[stream],
-    )
+        return await _resolve_video(track_id.removeprefix("bv"), page_index)
 
 
 async def _resolve_video(bvid: str, page_index: int) -> ResolvedTrack:
@@ -289,7 +256,6 @@ def _build_video_track(data: dict, page: dict, bvid: str) -> ResolvedTrack:
         title = f"{data.get('title', '')} - {page['part']}"
     return ResolvedTrack(
         id=f"bv{bvid}",
-        kind="video",
         title=title,
         artist=_first(data.get("owner") or {}, "name", "uname"),
         cover=_abs_url(page.get("first_frame") or data.get("pic") or ""),

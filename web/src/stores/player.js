@@ -203,7 +203,8 @@ export const usePlayerStore = defineStore("player", {
       this.currentIndex = index;
       this.resolved = null;
       this.playing = false;
-      this.mvEnabled = false;
+      this.mvReady = false;
+      // 注意:mvEnabled 是「模式」,跨曲目保持,不在切歌时重置
       this.error = "";
       this._loading = true;
       try {
@@ -228,7 +229,7 @@ export const usePlayerStore = defineStore("player", {
 
         if (!audioLocal) {
           // 音频需远程 → 解析远程,视频有本地则用本地覆盖(独立决策)
-          const resolved = await resolveTrack(track.kind, track.id);
+          const resolved = await resolveTrack(track.id);
           if (this.currentIndex !== index) return; // 用户已切歌,丢弃过期结果
           this.resolved = resolved;
           if (videoLocal) {
@@ -248,7 +249,6 @@ export const usePlayerStore = defineStore("player", {
           // 音频本地 → 不访问 B 站;视频:本地满足用本地,否则留空(开 MV 时懒解析)
           this.resolved = {
             id: track.id,
-            kind: track.kind,
             title: track.title,
             artist: track.artist,
             cover: track.cover,
@@ -264,6 +264,8 @@ export const usePlayerStore = defineStore("player", {
           this._loadStream();
         }
         await this._audio.play();
+        // MV 模式开启时,播到视频曲目自动续画面(模式跨曲目保持)
+        if (this.mvEnabled) await this._startMv(track);
       } catch (e) {
         // 3) 远程失败兜底:本地有任何音频档位就播本地(下架/断网也能听)
         const status = this.cacheStatus[track.id];
@@ -317,7 +319,6 @@ export const usePlayerStore = defineStore("player", {
     _playLocalOnly(track, status) {
       this.resolved = {
         id: track.id,
-        kind: track.kind,
         title: track.title,
         artist: track.artist,
         cover: track.cover,
@@ -382,7 +383,7 @@ export const usePlayerStore = defineStore("player", {
       this._audio.src = stream.stream_url;
       this._audio.loop = this.mode === "single-loop";
       this.currentTime = 0;
-      this._teardownMv();
+      this._teardownMv(false); // 只清理画面元素,保持 MV 模式状态
     },
 
     toggle() {
@@ -462,40 +463,36 @@ export const usePlayerStore = defineStore("player", {
     },
 
     // -------------------------------------------------- MV 模式
-    /** 开启/关闭 MV 画面。视频流为空(本地无画面)时懒解析远程,并补下缓存。 */
+    /** MV 模式开关:开启后本次播放及后续播放都保持带画面。
+     *  音频区曲目无画面但模式保留,播到视频曲目时自动出现画面。 */
     async toggleMv() {
-      const track = this.currentTrack;
-      if (!track || track.kind !== "video" || !this._video) return;
+      if (!this._video) return;
       this.mvEnabled = !this.mvEnabled;
-      if (!this.mvEnabled) {
+      if (this.mvEnabled) {
+        await this._startMv(this.currentTrack);
+      } else {
         this._teardownMv();
-        return;
       }
+    },
+
+    /** 为当前曲目启动画面(模式已开启时调用)。无视频流则懒解析远程并补下缓存。 */
+    async _startMv(track) {
+      if (!track || !this._video) return;
       if (!(this.resolved?.video_streams || []).length) {
-        // 懒解析:本地无视频档 → 远程解析画面流
         try {
-          const resolved = await resolveTrack(track.kind, track.id);
+          const resolved = await resolveTrack(track.id);
           if (this.currentTrack?.id !== track.id) return; // 期间已切歌
           this.resolved.video_streams = resolved.video_streams;
-          if (!this.resolved.video_streams.length) {
-            this.mvEnabled = false;
-            this.error = "该视频无 MV 画面";
-            return;
-          }
+          if (!this.resolved.video_streams.length) return; // 该视频无画面,静默
           this._applyVideoQualityId();
           queueCache([track.id], true).catch(() => {}); // 补下视频缓存
         } catch (e) {
-          this.mvEnabled = false;
           this.error = `MV 解析失败: ${e.message}`;
           return;
         }
       }
       const stream = this.currentVideoStream;
-      if (!stream) {
-        this.mvEnabled = false;
-        this.error = "无可用画面流";
-        return;
-      }
+      if (!stream) return;
       // 画面走视频流,声音统一由 audio 元素输出(本地/远程音频均可,时间轴一致)
       this._video.src = stream.stream_url;
       this._video.muted = true;
@@ -530,8 +527,9 @@ export const usePlayerStore = defineStore("player", {
       }, 1500);
     },
 
-    _teardownMv() {
-      this.mvEnabled = false;
+    /** 清理画面元素。resetMode=true 时同时关闭 MV 模式(用户手动关闭)。 */
+    _teardownMv(resetMode = true) {
+      if (resetMode) this.mvEnabled = false;
       this.mvReady = false;
       clearInterval(this._syncTimer);
       if (this._video) {
@@ -583,7 +581,7 @@ export const usePlayerStore = defineStore("player", {
         this.error = "本地缓存失效,已回退远程播放";
         const t = this._audio?.currentTime ?? 0;
         const wasPlaying = this.playing;
-        const resolved = await resolveTrack(track.kind, track.id);
+        const resolved = await resolveTrack(track.id);
         if (this.currentTrack?.id !== track.id) return; // 期间已切歌
         this.resolved = resolved;
         this._applyQualityId();

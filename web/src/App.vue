@@ -71,11 +71,14 @@ async function loadMore() {
 
     <main class="main">
       <section class="left">
-        <!-- MV 画面区(视频条目开启 MV 时显示) -->
+        <!-- MV 画面区(MV 模式开启且有画面流时显示) -->
         <!-- 注意:必须用 v-show 保持 video 元素常驻 DOM,否则首次开启前
              videoEl 为 null,store 无法操控元素 -->
         <Transition name="mv-fade">
-          <div v-show="store.mvEnabled" class="mv-box">
+          <div
+            v-show="store.mvEnabled && store.currentVideoStream"
+            class="mv-box"
+          >
             <video ref="videoEl" class="mv-video" controls playsinline></video>
             <div v-if="store.mvEnabled && !store.mvReady" class="mv-loading">
               MV 缓冲中…

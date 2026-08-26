@@ -63,17 +63,12 @@ class DownloadManager:
             local_audio = await cache_store.get_local_qualities(tid)
             state = self._states.get(tid, {}).get("state")
             if local_audio and state != "failed":
-                # 视频曲目:本地缺视频 → 入队补下(兼容升级前只有音频的旧缓存);
-                # 音频区曲目:有音频即完整
-                if tid.startswith("bv"):
-                    local_video = await cache_store.get_local_videos(tid)
-                    if local_video:
-                        self._mark_done(tid, local_audio)
-                        continue
-                    # 缺视频:落入下方入队逻辑
-                else:
+                # 本地缺视频 → 入队补下(兼容升级前只有音频的旧缓存)
+                local_video = await cache_store.get_local_videos(tid)
+                if local_video:
                     self._mark_done(tid, local_audio)
                     continue
+                # 缺视频:落入下方入队逻辑
             if state in ("pending", "downloading"):
                 continue
             if priority:
@@ -177,8 +172,7 @@ class DownloadManager:
             if attempt > 0:
                 await asyncio.sleep(2)
             try:
-                kind = "audio" if track_id.startswith("au") else "video"
-                resolved = await resolve_track(kind, track_id)
+                resolved = await resolve_track(track_id)
                 meta = {
                     "title": resolved.title,
                     "artist": resolved.artist,

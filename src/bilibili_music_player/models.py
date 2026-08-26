@@ -4,15 +4,17 @@ from pydantic import BaseModel
 
 
 class TrackInfo(BaseModel):
-    """一条曲目/视频的元数据(搜索结果条目,也是播放列表条目)。"""
+    """一条曲目的元数据(搜索结果条目,也是播放列表条目)。
 
-    id: str  # 内部 ID:音频区为 au{auid},视频为 bv{bvid}
-    kind: str  # "audio"(音频区歌曲) | "video"(视频)
+    当前所有曲目均为 bilibili 视频(id 形如 bvBVxxx),模型收敛为单一形态。
+    """
+
+    id: str  # bvBVxxx
     title: str
     artist: str  # UP 主
     cover: str  # 封面 URL
     duration: int  # 时长(秒)
-    source: str  # 来源标签,如 "bilibili 音频区" / "bilibili 视频"
+    source: str  # 来源标签,如 "bilibili 视频"
 
 
 class StreamInfo(BaseModel):
@@ -28,7 +30,7 @@ class StreamInfo(BaseModel):
 class ResolvedTrack(TrackInfo):
     """解析后的曲目:元数据 + 音频音质档 + 视频画质档(两者对称,均为 peer)。
 
-    音频/视频档位均按质量从低到高排列;视频条目才可能有 video_streams。
+    音频/视频档位均按质量从低到高排列;无画面的视频 video_streams 为空。
     """
 
     audio_streams: list[StreamInfo]  # 音频档位,按音质从低到高

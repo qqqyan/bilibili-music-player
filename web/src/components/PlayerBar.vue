@@ -29,8 +29,6 @@ function cycleMode() {
 
 const currentMode = computed(() => MODES.find((m) => m.id === store.mode));
 const volumePct = computed(() => store.volume * 100);
-// 视频类型曲目即可尝试 MV(本地缓存模式下点击时远程解析画面)
-const hasMv = computed(() => store.currentTrack?.kind === "video");
 
 function onQualityChange(e) {
   store.setQuality(Number(e.target.value));
@@ -82,8 +80,8 @@ function onVideoQualityChange(e) {
         <button class="icon-btn" title="下一首" @click="store.next()">⏭</button>
         <button
           class="icon-btn"
-          :class="{ active: store.mvEnabled, disabled: !hasMv }"
-          :title="hasMv ? 'MV 画面' : '音频区曲目无 MV'"
+          :class="{ active: store.mvEnabled }"
+          :title="store.mvEnabled ? 'MV 模式已开启(点击关闭)' : '开启 MV 模式(后续播放持续显示画面)'"
           @click="store.toggleMv()"
         >
           MV

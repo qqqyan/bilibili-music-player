@@ -74,7 +74,6 @@ uv run bilibili-music-player
 
 ## 已知限制
 
-- bilibili 音频区搜索接口(/x/mv/list)的关键词参数已失效,故搜索统一走全站视频;音频区 AU 号解析能力保留在后端(`/api/resolve/audio/au{auid}`),后续可用于导入 B 站歌单
 - 仅 FLV 流的远古视频不支持播放
 - 多 P 视频目前播放 P1,分 P 选择在规划中
 
