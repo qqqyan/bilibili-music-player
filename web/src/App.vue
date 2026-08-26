@@ -54,8 +54,8 @@ async function doLogout() {
 onMounted(async () => {
   store.attachMedia(audioEl.value, videoEl.value);
   await store.loadPlaylist();
-  // 轮询下载队列状态(本地服务,开销可忽略)
-  setInterval(() => store.refreshCacheStatus(), 5000);
+  // 轮询下载队列状态(本地服务,开销可忽略;2s 让下载图标更实时)
+  setInterval(() => store.refreshCacheStatus(), 2000);
   await fetchAuth();
   await store.loadSettings();
 });

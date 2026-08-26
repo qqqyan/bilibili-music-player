@@ -23,6 +23,16 @@ from .stream_proxy import prepare_stream
 async def lifespan(_: FastAPI):
     # 事件循环内初始化 zoku 客户端:开启 curl_cffi 浏览器伪装
     configure_client()
+    # 预热 zoku 全局状态(wbi mixin key / buvid 等):它们「首次用到才获取」
+    # 且无并发保护,启动时单线程预热可消除并发首次获取的竞态窗口
+    try:
+        from bilibili_api.utils.network import get_buvid, get_wbi_mixin_key
+
+        await get_wbi_mixin_key()
+        await get_buvid()
+        print("[config] zoku 全局状态预热完成(wbi/buvid)", flush=True)
+    except Exception as e:
+        print(f"[config] 预热失败(不影响使用,重试机制兜底): {str(e)[:120]}", flush=True)
     await download_manager.start()
     # 已登录时启动检查凭证有效性,过期自动续期
     if is_logged_in():

@@ -70,6 +70,13 @@ async function onDownloadConfirm({ audio, video }) {
           !
         </span>
         <span
+          v-else-if="cacheState(track).state === 'checking'"
+          class="cache-icon checking"
+          title="检查档位中"
+        >
+          ⟳
+        </span>
+        <span
           v-else-if="cacheState(track).state === 'downloading'"
           class="cache-icon downloading"
           title="下载中"
@@ -231,6 +238,19 @@ async function onDownloadConfirm({ audio, video }) {
 .cache-icon.downloading,
 .cache-icon.pending {
   color: var(--text-dim);
+}
+.cache-icon.checking {
+  color: #6fb1e5;
+  animation: checking-spin 1s linear infinite;
+  display: inline-block;
+}
+@keyframes checking-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 .cache-icon.failed {
   color: #e56d6d;
