@@ -97,15 +97,15 @@ async def api_cache_queue(req: QueueRequest):
 
 @app.get("/api/cache/status/{track_id}")
 async def api_cache_status(track_id: str):
-    """单曲缓存状态。"""
-    return download_manager.get_status(track_id)
+    """单曲缓存状态(实时查磁盘)。"""
+    return await download_manager.get_status(track_id)
 
 
 @app.get("/api/cache")
 async def api_cache_all():
     """全部缓存状态 + 缓存占用。"""
     return {
-        "items": download_manager.get_all_statuses(),
+        "items": await download_manager.get_all_statuses(),
         "total_size": await cache_store.cache_size(),
     }
 

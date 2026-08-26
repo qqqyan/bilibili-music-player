@@ -54,10 +54,15 @@ class DownloadManager:
     # ------------------------------------------------------------ 队列操作
 
     async def enqueue(self, track_ids: list[str], priority: bool = False) -> None:
-        """批量入队。已缓存 / 已在队列中的跳过;priority=True 插入队首。"""
+        """批量入队。已缓存 / 已在队列中的跳过;priority=True 插入队首。
+
+        缓存判定实时查磁盘(文件可能被外部删除,内存索引不可信)。
+        """
         for tid in track_ids:
-            if tid in self._local_index:
+            local = await cache_store.get_local_qualities(tid)
+            if local:
                 self._states[tid] = {"state": "done", "error": None}
+                self._local_index[tid] = local
                 continue
             if self._states.get(tid, {}).get("state") in ("pending", "downloading"):
                 continue
@@ -97,18 +102,25 @@ class DownloadManager:
 
     # ------------------------------------------------------------ 状态查询
 
-    def get_status(self, track_id: str) -> dict:
-        local = self._local_index.get(track_id, [])
-        state = self._states.get(track_id, {})
+    async def get_status(self, track_id: str) -> dict:
+        """单曲缓存状态。local_qualities 实时查磁盘,以文件真实存在为准。"""
+        local = await cache_store.get_local_qualities(track_id)
+        state = self._states.get(track_id, {}).get("state")
+        # 队列状态(pending/downloading/failed)优先展示;否则按磁盘有无判断
+        if state not in ("pending", "downloading", "failed"):
+            state = "done" if local else "none"
         return {
             "track_id": track_id,
-            "state": state.get("state", "done" if local else "none"),
-            "error": state.get("error"),
+            "state": state,
+            "error": self._states.get(track_id, {}).get("error"),
             "local_qualities": local,
         }
 
-    def get_all_statuses(self) -> list[dict]:
-        return [self.get_status(tid) for tid in self._all_known_ids()]
+    async def get_all_statuses(self) -> list[dict]:
+        result = []
+        for tid in self._all_known_ids():
+            result.append(await self.get_status(tid))
+        return result
 
     def _all_known_ids(self) -> set[str]:
         ids = set(self._local_index.keys())

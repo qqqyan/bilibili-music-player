@@ -89,7 +89,13 @@ export const usePlayerStore = defineStore("player", {
       audioEl.addEventListener("pause", () => (this.playing = false));
       audioEl.addEventListener("ended", () => this._onEnded());
       audioEl.addEventListener("error", () => {
-        if (audioEl.src && this.resolved) this.error = "音频流播放失败,可尝试切换音质";
+        if (!audioEl.src || !this.resolved) return;
+        // 本地缓存文件失效(被外部删除等):自动回退远程播放
+        if (audioEl.src.includes("/api/local/")) {
+          this._fallbackToRemote();
+        } else {
+          this.error = "音频流播放失败,可尝试切换音质";
+        }
       });
       videoEl.addEventListener("error", () => (this.mvReady = false));
       // 首帧可用即可显示画面(不要求正在播放:暂停状态开 MV 也有画面)
@@ -427,6 +433,32 @@ export const usePlayerStore = defineStore("player", {
     async removeCache(trackId) {
       await deleteCacheTrack(trackId).catch(() => {});
       await this.refreshCacheStatus();
+    },
+
+    /** 本地缓存文件失效(被删)时自动回退远程播放并重新排队下载 */
+    async _fallbackToRemote() {
+      if (this._fallingBack) return; // 防 error 事件连续触发重入
+      this._fallingBack = true;
+      try {
+        const track = this.currentTrack;
+        if (!track) return;
+        this.error = "本地缓存失效,已回退远程播放";
+        const t = this._audio?.currentTime ?? 0;
+        const wasPlaying = this.playing;
+        const resolved = await resolveTrack(track.kind, track.id);
+        if (this.currentTrack?.id !== track.id) return; // 期间已切歌
+        this.resolved = resolved;
+        this._applyQualityId();
+        this._loadStream();
+        if (this._audio) this._audio.currentTime = t;
+        if (wasPlaying) await this._audio?.play();
+        // 文件已被删,重新排队下载
+        queueCache([track.id], true).catch(() => {});
+      } catch (e) {
+        this.error = `本地缓存失效且远程不可用: ${e.message}`;
+      } finally {
+        this._fallingBack = false;
+      }
     },
 
     // -------------------------------------------------- 内部
