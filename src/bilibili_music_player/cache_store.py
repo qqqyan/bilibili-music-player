@@ -155,6 +155,35 @@ def _delete_sync(track_id: str) -> None:
     shutil.rmtree(_track_dir(track_id), ignore_errors=True)
 
 
+def _cleanup_lower_sync(track_id: str, kind: str, keep_quality_id: int) -> None:
+    """删除同类型中比 keep_quality_id 更低档的本地文件。
+
+    音质按 QUALITY_ORDER 比较(数值不可靠);视频按数值比较。
+    """
+    dir_path = _track_dir(track_id)
+    if not dir_path.exists():
+        return
+    keep_order = (
+        QUALITY_ORDER.index(keep_quality_id)
+        if kind == "audio" and keep_quality_id in QUALITY_ORDER
+        else keep_quality_id
+    )
+    prefix, ext = ("v", ".mp4") if kind == "video" else ("q", ".m4a")
+    for f in dir_path.glob(f"{prefix}*{ext}"):
+        try:
+            qid = int(f.stem.removeprefix(prefix))
+        except ValueError:
+            continue
+        qid_order = (
+            QUALITY_ORDER.index(qid)
+            if kind == "audio" and qid in QUALITY_ORDER
+            else qid
+        )
+        if qid_order < keep_order:
+            f.unlink(missing_ok=True)
+            print(f"[cache] 清理旧档: {track_id} {kind} {qid}", flush=True)
+
+
 def _cache_size_sync() -> int:
     """缓存目录总大小(字节)。"""
     if not CACHE_DIR.exists():
@@ -211,6 +240,53 @@ async def save_downloaded(track_id: str, quality_id: int, meta: dict, kind: str 
 async def delete_track(track_id: str) -> None:
     async with _lock:
         await asyncio.to_thread(_delete_sync, track_id)
+
+
+async def cleanup_lower(track_id: str, kind: str, keep_quality_id: int) -> None:
+    """删除同类型更低档本地文件(设置开启「自动清理旧档」时由下载器调用)。"""
+    async with _lock:
+        await asyncio.to_thread(_cleanup_lower_sync, track_id, kind, keep_quality_id)
+
+
+def _cleanup_all_sync() -> int:
+    """遍历全部缓存,每首曲目音频/视频各只保留最高档。返回删除文件数。"""
+    removed = 0
+    if not CACHE_DIR.exists():
+        return 0
+    for track_dir in CACHE_DIR.iterdir():
+        if not track_dir.is_dir():
+            continue
+        for prefix, ext in (("q", ".m4a"), ("v", ".mp4")):
+            kind = "audio" if prefix == "q" else "video"
+            files = list(track_dir.glob(f"{prefix}*{ext}"))
+            if len(files) <= 1:
+                continue
+
+            def order_of(f, prefix=prefix, kind=kind):
+                try:
+                    qid = int(f.stem.removeprefix(prefix))
+                except ValueError:
+                    return -1
+                if kind == "audio":
+                    return (
+                        QUALITY_ORDER.index(qid)
+                        if qid in QUALITY_ORDER
+                        else len(QUALITY_ORDER)
+                    )
+                return qid
+
+            files.sort(key=order_of)
+            for f in files[:-1]:  # 只保留最高档
+                f.unlink(missing_ok=True)
+                removed += 1
+                print(f"[cache] 清理旧档: {track_dir.name} {kind} {f.stem}", flush=True)
+    return removed
+
+
+async def cleanup_all() -> int:
+    """遍历全部缓存只保留每首最高档(设置开启「清理旧档」时立即执行)。"""
+    async with _lock:
+        return await asyncio.to_thread(_cleanup_all_sync)
 
 
 async def clear_all() -> None:

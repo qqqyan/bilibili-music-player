@@ -1,11 +1,12 @@
 <script setup>
 import { onMounted, ref } from "vue";
 import { usePlayerStore } from "./stores/player";
-import { searchTracks } from "./api";
+import { authLogout, authStatus, searchTracks } from "./api";
 import SearchBar from "./components/SearchBar.vue";
 import SearchResults from "./components/SearchResults.vue";
 import Playlist from "./components/Playlist.vue";
 import PlayerBar from "./components/PlayerBar.vue";
+import SettingsDialog from "./components/SettingsDialog.vue";
 
 const store = usePlayerStore();
 const audioEl = ref(null);
@@ -19,11 +20,44 @@ const searchError = ref("");
 const keyword = ref("");
 const page = ref(1);
 
+// 登录状态与设置面板
+const auth = ref({ logged_in: false, user: null });
+const showSettings = ref(false);
+const settingsTab = ref("settings");
+
+function openSettings(tab) {
+  settingsTab.value = tab;
+  showSettings.value = true;
+}
+
+async function fetchAuth() {
+  try {
+    auth.value = await authStatus();
+  } catch {
+    /* 后端不可达时忽略 */
+  }
+}
+
+async function onLoginSuccess() {
+  showSettings.value = false;
+  await fetchAuth();
+  // 登录后凭证已热更新:刷新当前曲目档位(其余曲目在播放时自动检查)
+  await store.refreshResolvedStreams();
+}
+
+async function doLogout() {
+  await authLogout().catch(() => {});
+  await fetchAuth();
+  await store.refreshResolvedStreams();
+}
+
 onMounted(async () => {
   store.attachMedia(audioEl.value, videoEl.value);
   await store.loadPlaylist();
   // 轮询下载队列状态(本地服务,开销可忽略)
   setInterval(() => store.refreshCacheStatus(), 5000);
+  await fetchAuth();
+  await store.loadSettings();
 });
 
 async function doSearch(kw) {
@@ -67,6 +101,29 @@ async function loadMore() {
         bilibili 音乐播放器
       </div>
       <SearchBar :loading="searching" @search="doSearch" />
+      <div class="auth-area">
+        <template v-if="auth.logged_in">
+          <img
+            v-if="auth.user?.face"
+            class="avatar"
+            :src="auth.user.face"
+            alt=""
+            title="账号设置"
+            @click="openSettings('account')"
+          />
+          <span class="nickname">{{ auth.user?.name || "已登录" }}</span>
+        </template>
+        <button v-else class="login-btn" @click="openSettings('account')">
+          登录
+        </button>
+        <button
+          class="icon-btn"
+          title="设置"
+          @click="openSettings('settings')"
+        >
+          ⚙
+        </button>
+      </div>
     </header>
 
     <main class="main">
@@ -107,6 +164,13 @@ async function loadMore() {
 
     <!-- 音频输出统一由该元素驱动 -->
     <audio ref="audioEl" preload="auto"></audio>
+
+    <SettingsDialog
+      v-if="showSettings"
+      :initial-tab="settingsTab"
+      @close="showSettings = false"
+      @login-success="onLoginSuccess"
+    />
   </div>
 </template>
 
@@ -133,6 +197,47 @@ async function loadMore() {
   font-size: 16px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.auth-area {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  cursor: pointer;
+}
+.nickname {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.login-btn {
+  height: 32px;
+  padding: 0 18px;
+  border-radius: 16px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 13px;
+  transition: all 0.15s;
+}
+.login-btn:hover {
+  background: var(--accent-soft);
+}
+.logout-btn {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.logout-btn:hover {
+  color: #e56d6d;
+  background: var(--hover);
 }
 .brand-dot {
   width: 10px;
