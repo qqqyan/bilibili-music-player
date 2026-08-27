@@ -18,6 +18,9 @@ dependencies = [
 [project.scripts]
 bilibili-music-player = "bilibili_music_player:main"
 
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
 [tool.uv.sources]
 bilibili-api-zoku = { url = "https://github.com/bromothymolb/bilibili-api-zoku/archive/a0a1566c7c462ab57a3891c3a5f12976cbd11e9e.tar.gz" }
 

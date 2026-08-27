@@ -1,27 +1,35 @@
 <script setup>
-import { ref } from "vue";
+import { onMounted, ref } from "vue";
+import { getQualities } from "../api";
 
 const emit = defineEmits(["close", "confirm"]);
 
-// 档位列表(id 与后端音质/画质枚举一致)
-const AUDIO_OPTIONS = [
-  { id: -1, label: "最高可用" },
-  { id: 30216, label: "64K" },
-  { id: 30232, label: "132K" },
-  { id: 30280, label: "192K" },
-  { id: 30251, label: "Hi-Res(需登录)" },
-  { id: 30250, label: "杜比(需登录)" },
-];
-const VIDEO_OPTIONS = [
-  { id: -1, label: "最高可用" },
-  { id: 16, label: "360P" },
-  { id: 32, label: "480P" },
-  { id: 64, label: "720P" },
-  { id: 80, label: "1080P" },
-  { id: 116, label: "1080P60" },
-  { id: 120, label: "4K" },
-  { id: 127, label: "8K" },
-];
+// 档位列表由后端提供(唯一事实来源);失败时用兜底列表
+const audioOptions = ref([{ id: -1, label: "最高可用" }]);
+const videoOptions = ref([{ id: -1, label: "最高可用" }]);
+const loadError = ref("");
+
+onMounted(async () => {
+  try {
+    const data = await getQualities();
+    audioOptions.value = [
+      { id: -1, label: "最高可用" },
+      ...data.audio.map((q) => ({
+        id: q.id,
+        label: q.label + (q.id > 30280 ? "(需登录)" : ""),
+      })),
+    ];
+    videoOptions.value = [
+      { id: -1, label: "最高可用" },
+      ...data.video.map((q) => ({
+        id: q.id,
+        label: q.label + (q.id > 80 ? "(需登录)" : ""),
+      })),
+    ];
+  } catch {
+    loadError.value = "档位列表加载失败,仅可选最高档";
+  }
+});
 
 const audio = ref(-1);
 const video = ref(-1);
@@ -37,15 +45,16 @@ const video = ref(-1);
       <p class="hint">
         遍历播放列表下载所选档位;某首没有该档时会自动降级到它最好的可用档。
       </p>
+      <div v-if="loadError" class="hint error">{{ loadError }}</div>
       <label>音质</label>
       <select v-model.number="audio">
-        <option v-for="o in AUDIO_OPTIONS" :key="o.id" :value="o.id">
+        <option v-for="o in audioOptions" :key="o.id" :value="o.id">
           {{ o.label }}
         </option>
       </select>
       <label>画质(视频画面)</label>
       <select v-model.number="video">
-        <option v-for="o in VIDEO_OPTIONS" :key="o.id" :value="o.id">
+        <option v-for="o in videoOptions" :key="o.id" :value="o.id">
           {{ o.label }}
         </option>
       </select>
@@ -93,6 +102,9 @@ const video = ref(-1);
   font-size: 12px;
   color: var(--text-dim);
   line-height: 1.7;
+}
+.hint.error {
+  color: #e56d6d;
 }
 label {
   font-size: 12px;

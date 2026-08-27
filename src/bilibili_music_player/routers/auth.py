@@ -20,8 +20,8 @@ from pydantic import BaseModel
 
 LOGIN_API = get_api("login")
 
-from . import auth_store
-from .config import get_credential, is_logged_in, refresh_credential
+from ..repositories import auth_store
+from ..config import get_credential, is_logged_in, refresh_credential
 
 router = APIRouter(prefix="/api/auth")
 

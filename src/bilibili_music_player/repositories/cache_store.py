@@ -11,41 +11,17 @@ import json
 import time
 from pathlib import Path
 
-from .config import PROJECT_ROOT
+from ..config import PROJECT_ROOT
 
 CACHE_DIR = PROJECT_ROOT / "data" / "cache"
 
 _lock = asyncio.Lock()
 
-# 音质 id -> 标签(与 bilibili_client 的映射保持一致)
-QUALITY_LABELS = {
-    0: "标准",  # 音频区单档 / MP4 单文件
-    30216: "64K",
-    30232: "132K",
-    30280: "192K",
-    30251: "Hi-Res",
-    30250: "杜比",
-}
-
-# 音质高低顺序(低 -> 高),用于「本地音质是否满足期望档」的判断
-QUALITY_ORDER = [0, 30216, 30232, 30280, 30251, 30250]
-
-# 视频画质枚举值 -> 标签(仅用于展示)
-VIDEO_QUALITY_LABELS = {
-    6: "240P", 16: "360P", 32: "480P", 64: "720P", 74: "720P60",
-    80: "1080P", 112: "1080P+", 116: "1080P60", 120: "4K",
-    125: "HDR", 126: "杜比", 127: "8K",
-}
-
-
-def quality_label(quality_id: int) -> str:
-    return QUALITY_LABELS.get(quality_id, str(quality_id))
-
-
-def video_quality_label(quality_id: int) -> str:
-    return VIDEO_QUALITY_LABELS.get(quality_id, str(quality_id))
-
-
+from ..quality import (  # noqa: E402
+    QUALITY_ORDER,
+    quality_label,
+    video_quality_label,
+)
 def _track_dir(track_id: str) -> Path:
     # track_id 形如 bvBVxxx / au123,直接作目录名安全
     return CACHE_DIR / track_id

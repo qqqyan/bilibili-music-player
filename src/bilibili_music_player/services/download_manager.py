@@ -12,8 +12,10 @@ from collections import deque
 
 import httpx
 
-from . import cache_store
-from .bilibili_client import resolve_track
+from ..repositories import cache_store
+from .parse_service import resolve_track
+from .. import quality
+from ..quality import pick_stream_by_quality
 from .stream_proxy import BROWSER_UA, REFERER, get_stream_urls
 
 # 下载任务之间的固定间隔(秒),避免连续请求触发风控
@@ -395,7 +397,7 @@ class DownloadManager:
 
     async def _maybe_cleanup_lower(self, track_id: str, kind: str, quality_id: int) -> None:
         """设置开启「自动清理旧档」时,删除刚下载档位以下的旧缓存。"""
-        from . import settings_store
+        from ..repositories import settings_store
 
         if settings_store.load_settings().get("cleanup_old_quality"):
             await cache_store.cleanup_lower(track_id, kind, quality_id)
@@ -452,7 +454,7 @@ def _local_satisfies(local_quals: list[dict], want_stream, kind: str) -> bool:
         return False
     if kind == "video":
         return max(q["quality_id"] for q in local_quals) >= want_stream.quality_id
-    order = cache_store.QUALITY_ORDER
+    order = quality.QUALITY_ORDER
     local_best = max(
         order.index(q["quality_id"]) if q["quality_id"] in order else len(order)
         for q in local_quals
@@ -466,32 +468,10 @@ def _local_satisfies(local_quals: list[dict], want_stream, kind: str) -> bool:
 
 
 def _pick_desired_stream(streams: list, desired_id: int, kind: str):
-    """期望档选择:存在则用;否则降级到不高于期望档的最好档。
-
-    desired_id: -1 = 最高; -2 = 跳过该类型(不下载)。
-    """
-    if not streams:
-        return None
+    """期望档选择(下载用)。desired_id: -1=最高;-2=跳过该类型。"""
     if desired_id == -2:
         return None
-    if desired_id <= 0:
-        return streams[-1]
-    for s in streams:
-        if s.quality_id == desired_id:
-            return s
-    # 降级:不高于期望档的最高档(音质按顺序表,视频按数值)
-    if kind == "video":
-        lower = [s for s in streams if s.quality_id <= desired_id]
-    else:
-        order = cache_store.QUALITY_ORDER
-        want = order.index(desired_id) if desired_id in order else len(order)
-        lower = [
-            s
-            for s in streams
-            if (order.index(s.quality_id) if s.quality_id in order else len(order))
-            <= want
-        ]
-    return lower[-1] if lower else streams[0]
+    return pick_stream_by_quality(streams, desired_id, kind)
 
 
 # 全局单例

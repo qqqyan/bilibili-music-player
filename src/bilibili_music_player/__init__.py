@@ -11,7 +11,7 @@ import uvicorn
 
 def main() -> None:
     uvicorn.run(
-        "bilibili_music_player.main:app",
+        "bilibili_music_player.app:app",
         host="127.0.0.1",
         port=8000,
         reload=False,

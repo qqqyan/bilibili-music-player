@@ -7,7 +7,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from .config import PROJECT_ROOT
+from ..config import PROJECT_ROOT
 
 DATA_DIR = PROJECT_ROOT / "data"
 PLAYLIST_FILE = DATA_DIR / "playlist.json"

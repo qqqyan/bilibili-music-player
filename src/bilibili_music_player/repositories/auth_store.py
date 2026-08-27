@@ -6,7 +6,7 @@
 import json
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
 AUTH_FILE = DATA_DIR / "auth.json"
 
 _CREDENTIAL_KEYS = ("sessdata", "bili_jct", "dedeuserid", "ac_time_value", "buvid3", "buvid4")

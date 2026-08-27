@@ -11,7 +11,7 @@ from pathlib import Path
 
 from bilibili_api.utils.network import Credential
 
-from . import auth_store
+from .repositories import auth_store
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 

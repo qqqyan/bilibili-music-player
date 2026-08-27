@@ -37,15 +37,22 @@
 ## 架构
 
 ```
-web/            Vue 3 + Vite 前端(播放器 UI)
-src/            FastAPI 后端
-  ├─ main.py              API 路由(搜索/解析/流代理/缓存)
-  ├─ bilibili_client.py   bilibili-api-zoku 封装(搜索、DASH 流解析)
-  ├─ stream_proxy.py      CDN 流代理(Range 透传、多 CDN 回退)
-  ├─ cache_store.py       本地缓存存储(data/cache/{track_id}/)
-  ├─ download_manager.py  限频下载队列(串行、点播优先、失败重试)
-  ├─ playlist_store.py    歌单持久化(data/playlist.json)
-  └─ config.py            登录凭证加载(.env)
+web/            Vue 3 + Vite 前端(播放器 UI,薄客户端:状态机+渲染)
+src/            FastAPI 后端(Spring Boot 式分层)
+  ├─ app.py               应用组装:lifespan、中间件、路由注册
+  ├─ main.py              入口(uvicorn)
+  ├─ routers/             Controller 层(按域:search/track/cache/playlist/settings/auth)
+  ├─ services/            Service 层
+  │   ├─ search_service.py   全站视频搜索
+  │   ├─ parse_service.py    DASH 音视频流解析(限频)
+  │   ├─ stream_proxy.py     CDN 流代理(Range 透传、多 CDN 回退)
+  │   ├─ download_manager.py 限频下载队列(检查/下载两阶段、点播优先、失败重试)
+  │   └─ _utils.py           共享小工具
+  ├─ repositories/        Repository 层:cache/playlist/settings/auth 持久化
+  ├─ quality.py           Domain 层:档位顺序/标签/期望档选择(唯一事实来源)
+  ├─ models.py            Domain 层:数据模型
+  └─ config.py            配置(凭证加载、impersonate)
+tests/          pytest 冒烟与档位规则测试(uv run pytest tests/)
 ```
 
 后端依赖上游维护版 [bilibili-api-zoku](https://github.com/bromothymolb/bilibili-api-zoku),通过 GitHub archive tarball 固定 commit 安装(绕开 git 协议,国内网络友好;升级时更新 `pyproject.toml` 中的 commit hash)。

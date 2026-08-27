@@ -25,6 +25,18 @@ export function resolveTrack(id) {
   return request(`/api/resolve/${id}`);
 }
 
+/** 播放决策接口:合并档位列表 + 播放来源决策 + 补缓存决策 */
+export function trackPlan(id, { audioQuality = -1, videoQuality = -1 } = {}) {
+  return request(
+    `/api/track/${id}/plan?audio_quality=${audioQuality}&video_quality=${videoQuality}`
+  );
+}
+
+/** 统一播放端点(后端路由本地/在线,前端无需感知来源) */
+export function playUrl(id, kind, qualityId) {
+  return `/api/play/${id}?kind=${kind}&quality_id=${qualityId}`;
+}
+
 /** 获取歌单(后端项目目录持久化) */
 export function getPlaylist() {
   return request("/api/playlist");
@@ -159,6 +171,11 @@ export async function authCredential(form) {
   }
   if (!res.ok) throw new Error(body.detail || `登录失败: ${res.statusText}`);
   return body;
+}
+
+/** 可选档位列表(后端唯一事实来源) */
+export function getQualities() {
+  return request("/api/qualities");
 }
 
 /** 应用设置 */

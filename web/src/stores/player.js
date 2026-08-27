@@ -4,22 +4,17 @@ import {
   clearCache,
   deleteCacheTrack,
   getAllCache,
-  getCacheStatus,
   getPlaylist,
   getSettings,
-  localStreamUrl,
-  localVideoUrl,
+  playUrl,
   queueCache,
-  resolveTrack,
   savePlaylist,
   saveSettings,
+  trackPlan,
 } from "../api";
 
 const LS_KEY = "bmp-playlist";
 const LS_PREF = "bmp-pref";
-
-// 音质高低顺序(与后端 cache_store.QUALITY_ORDER 一致,低 -> 高)
-const QUALITY_ORDER = [0, 30216, 30232, 30280, 30251, 30250];
 
 function loadJson(key, fallback) {
   try {
@@ -108,16 +103,16 @@ export const usePlayerStore = defineStore("player", {
       audioEl.addEventListener("ended", () => this._onEnded());
       audioEl.addEventListener("error", () => {
         if (!audioEl.src || !this.resolved) return;
-        // 本地缓存文件失效(被外部删除等):自动回退远程播放
-        if (audioEl.src.includes("/api/local/")) {
-          this._fallbackToRemote();
-        } else {
-          this.error = "音频流播放失败,可尝试切换音质";
-        }
+        // 统一播放端点:后端自动路由本地/在线(本地被删会落回远程),无需前端回退
+        this.error = "音频流播放失败,可尝试切换音质";
       });
       videoEl.addEventListener("error", () => (this.mvReady = false));
       // 首帧可用即可显示画面(不要求正在播放:暂停状态开 MV 也有画面)
       videoEl.addEventListener("loadeddata", () => (this.mvReady = true));
+      // seek 后缓冲完成触发 canplay(loadeddata 仅首次加载触发一次),
+      // 必须监听它恢复画面,否则「缓冲中」会一直挂着
+      videoEl.addEventListener("canplay", () => (this.mvReady = true));
+      videoEl.addEventListener("playing", () => (this.mvReady = true));
       videoEl.addEventListener("waiting", () => (this.mvReady = false));
       // 音画双向同步:用户在画面控制条上的操作同步到音频
       videoEl.addEventListener("pause", () => {
@@ -266,16 +261,11 @@ export const usePlayerStore = defineStore("player", {
     async playTrack(index, record = true) {
       const track = this.playlist[index];
       if (!track) return;
-      // 点击正在播放的曲目:不打断播放(播放时已自动检查档位)
+      // 点击正在播放的曲目:不打断播放
       if (index === this.currentIndex && this.resolved) {
         return;
       }
-      // 点播优先:曲目在下载队列中(检查中/待下载/下载中)时立即提队首,
-      // 不等待后续异步检查(不阻塞播放)
-      const st = this.cacheStatus[track.id]?.state;
-      if (st === "checking" || st === "pending" || st === "downloading") {
-        this._queueCache([track.id], { priority: true });
-      }
+      // 点播优先由后端处理:plan 接口调用即提队首
       if (record && this.currentIndex >= 0 && index !== this.currentIndex) {
         this._history.push(this.currentIndex); // 记住来的地方
         if (this._history.length > 10000) this._history.shift();
@@ -288,130 +278,44 @@ export const usePlayerStore = defineStore("player", {
       this.error = "";
       this._loading = true;
       try {
-        // 1) 查询本地缓存状态
-        let status = this.cacheStatus[track.id];
-        if (!status) {
-          status = await getCacheStatus(track.id).catch(() => null);
-          if (status) this.cacheStatus[track.id] = status;
-        }
-        // 2) 音频/视频独立本地优先决策(互不影响,可能混合来源):
-        //    本地最高档满足期望 → 用本地;否则远程
-        const audioLocal = this._pickLocalStream(
-          status?.local_qualities || [],
-          this.qualityId,
-          QUALITY_ORDER
-        );
-        const videoLocal = this._pickLocalStream(
-          status?.local_videos || [],
-          this.videoQualityId,
-          null // 视频画质枚举值恰与画质正相关,数值比较即可
-        );
-
-        if (!audioLocal) {
-          // 音频需远程 → 解析远程,视频有本地则用本地覆盖(独立决策)
-          const resolved = await resolveTrack(track.id);
-          if (this.currentIndex !== index) return; // 用户已切歌,丢弃过期结果
-          this.resolved = resolved;
-          if (videoLocal) {
-            this.resolved.video_streams = this._localVideoStreams(
-              track.id,
-              status.local_videos
-            );
-          }
-          this._applyQualityId();
-          this._applyVideoQualityId();
-          this._loadStream();
-          // 点播优先:音频未缓存则插队下载
-          if (!status?.local_qualities?.length) {
-            this._queueCache([track.id], { priority: true });
-          }
-        } else {
-          // 音频本地 → 不访问 B 站;视频:本地满足用本地,否则留空(开 MV 时懒解析)
-          this.resolved = {
-            id: track.id,
-            title: track.title,
-            artist: track.artist,
-            cover: track.cover,
-            duration: track.duration,
-            source: track.source,
-            audio_streams: this._localAudioStreams(track.id, status.local_qualities),
-            video_streams: videoLocal
-              ? this._localVideoStreams(track.id, status.local_videos)
-              : [],
-          };
-          this._applyQualityId();
-          this._applyVideoQualityId();
-          this._loadStream();
-        }
+        // 后端决策:plan 接口一次给出档位列表 + 播放来源 + 补缓存决策,
+        // 前端无需感知本地/在线
+        const plan = await trackPlan(track.id, {
+          audioQuality: this.qualityId,
+          videoQuality: this.videoQualityId,
+        });
+        if (this.currentIndex !== index) return; // 用户已切歌,丢弃过期结果
+        this.resolved = {
+          id: plan.track.id,
+          title: plan.track.title,
+          artist: plan.track.artist,
+          cover: plan.track.cover,
+          duration: plan.track.duration,
+          source: plan.track.source,
+          audio_streams: plan.audio_streams,
+          video_streams: plan.video_streams,
+        };
+        this._applyQualityId();
+        this._applyVideoQualityId();
+        this._loadStream();
         await this._audio.play();
         // MV 模式开启时,播到视频曲目自动续画面(模式跨曲目保持)
         if (this.mvEnabled) await this._startMv(track);
-        // 每次播放都异步检查远程档位并合并进下拉(不阻塞播放)
-        this._checkRemoteStreams(track, index);
-      } catch (e) {
-        // 3) 远程失败兜底:本地有任何音频档位就播本地(下架/断网也能听)
-        const status = this.cacheStatus[track.id];
-        if (status?.local_qualities?.length && this.currentIndex === index) {
-          this._playLocalOnly(this.playlist[index], status);
-          try {
-            await this._audio.play();
-          } catch {
-            this.error = `播放失败: ${e.message}`;
-          }
-        } else {
-          this.error = `解析失败: ${e.message}`;
+        // 按后端补缓存决策触发下载(音频+视频合并为一次入队:
+        // 分两次入队时第二次会被「已入队跳过」,导致视频补下丢失)
+        if (plan.download?.audio != null || plan.download?.video != null) {
+          this._queueCache([track.id], {
+            priority: true,
+            force: true,
+            desired_audio: plan.download.audio ?? -2,
+            desired_video: plan.download.video ?? -2,
+          });
         }
+      } catch (e) {
+        this.error = `解析失败: ${e.message}`;
       } finally {
         this._loading = false;
       }
-    },
-
-    /** 本地档位是否满足期望:满足返回应播档位,否则 null(走远程)。
-     *  order 为 null 时按档位数值比较(视频画质数值正相关);音质需按顺序表。 */
-    _pickLocalStream(quals, wantId, order) {
-      if (!quals.length) return null;
-      if (wantId < 0) return quals[quals.length - 1]; // 自动:本地最高
-      const best = quals[quals.length - 1];
-      const bestOrder = order ? order.indexOf(best.quality_id) : best.quality_id;
-      const wantOrder = order ? order.indexOf(wantId) : wantId;
-      return wantOrder >= 0 && bestOrder >= wantOrder ? best : null;
-    },
-
-    _localAudioStreams(trackId, quals) {
-      return quals.map((q) => ({
-        quality_id: q.quality_id,
-        quality: q.quality,
-        mime: "audio/mp4",
-        bandwidth: 0,
-        stream_url: localStreamUrl(trackId, q.quality_id),
-      }));
-    },
-
-    _localVideoStreams(trackId, vquals) {
-      return vquals.map((q) => ({
-        quality_id: q.quality_id,
-        quality: q.quality,
-        mime: "video/mp4",
-        bandwidth: 0,
-        stream_url: localVideoUrl(trackId, q.quality_id),
-      }));
-    },
-
-    /** 兜底:仅用本地音频档构造播放源 */
-    _playLocalOnly(track, status) {
-      this.resolved = {
-        id: track.id,
-        title: track.title,
-        artist: track.artist,
-        cover: track.cover,
-        duration: track.duration,
-        source: track.source,
-        audio_streams: this._localAudioStreams(track.id, status.local_qualities),
-        video_streams: this._localVideoStreams(track.id, status.local_videos || []),
-      };
-      this._applyQualityId();
-      this._applyVideoQualityId();
-      this._loadStream();
     },
 
     /** 把期望音质(qualityId)映射为当前 resolved 的档位索引 */
@@ -462,7 +366,7 @@ export const usePlayerStore = defineStore("player", {
     _loadStream() {
       const stream = this.currentStream;
       if (!stream) return;
-      this._audio.src = stream.stream_url;
+      this._audio.src = playUrl(this.currentTrack.id, "audio", stream.quality_id);
       this._audio.loop = this.mode === "single-loop";
       this.currentTime = 0;
       this._teardownMv(false); // 只清理画面元素,保持 MV 模式状态
@@ -538,13 +442,40 @@ export const usePlayerStore = defineStore("player", {
       const wasPlaying = this.playing;
       this.qualityIndex = i;
       this.qualityId = stream.quality_id; // 记住期望档,决定后续曲目走本地还是远程
-      // 只换音频源,画面独立不受影响
-      this._audio.src = stream.stream_url;
+      // 只换音频源,画面独立不受影响(统一端点,后端路由本地/在线)
+      this._audio.src = playUrl(this.currentTrack.id, "audio", stream.quality_id);
       this._audio.loop = this.mode === "single-loop";
       this._audio.currentTime = t;
       if (wasPlaying) await this._audio?.play();
-      // 期望档未满足(本地低于它)时自动后台补下
-      if (this.currentTrack) this._maybeAutoDownload(this.currentTrack.id);
+      // 切档后重拉 plan:补缓存决策由后端给出
+      this._syncPlanDownload();
+    },
+
+    /** 按当前期望档重拉 plan,同步档位列表与补缓存决策(切档/登录后调用) */
+    async _syncPlanDownload() {
+      const track = this.currentTrack;
+      if (!track || !this.resolved) return;
+      try {
+        const plan = await trackPlan(track.id, {
+          audioQuality: this.qualityId,
+          videoQuality: this.videoQualityId,
+        });
+        if (this.currentTrack?.id !== track.id) return; // 期间已切歌
+        this.resolved.audio_streams = plan.audio_streams;
+        this.resolved.video_streams = plan.video_streams;
+        this._applyQualityId();
+        this._applyVideoQualityId();
+        if (plan.download?.audio != null || plan.download?.video != null) {
+          this._queueCache([track.id], {
+            priority: true,
+            force: true,
+            desired_audio: plan.download.audio ?? -2,
+            desired_video: plan.download.video ?? -2,
+          });
+        }
+      } catch {
+        /* 静默 */
+      }
     },
 
     // -------------------------------------------------- MV 模式
@@ -565,12 +496,22 @@ export const usePlayerStore = defineStore("player", {
       if (!track || !this._video) return;
       if (!(this.resolved?.video_streams || []).length) {
         try {
-          const resolved = await resolveTrack(track.id);
+          const plan = await trackPlan(track.id, {
+            audioQuality: this.qualityId,
+            videoQuality: this.videoQualityId,
+          });
           if (this.currentTrack?.id !== track.id) return; // 期间已切歌
-          this.resolved.video_streams = resolved.video_streams;
+          this.resolved.video_streams = plan.video_streams;
           if (!this.resolved.video_streams.length) return; // 该视频无画面,静默
           this._applyVideoQualityId();
-          this._queueCache([track.id], { priority: true }); // 补下视频缓存
+          if (plan.download?.video != null) {
+            this._queueCache([track.id], {
+              priority: true,
+              force: true,
+              desired_audio: -2,
+              desired_video: plan.download.video,
+            }); // 补下视频缓存
+          }
         } catch (e) {
           this.error = `MV 解析失败: ${e.message}`;
           return;
@@ -578,8 +519,8 @@ export const usePlayerStore = defineStore("player", {
       }
       const stream = this.currentVideoStream;
       if (!stream) return;
-      // 画面走视频流,声音统一由 audio 元素输出(本地/远程音频均可,时间轴一致)
-      this._video.src = stream.stream_url;
+      // 画面走视频流,声音统一由 audio 元素输出(统一端点,后端路由来源)
+      this._video.src = playUrl(track.id, "video", stream.quality_id);
       this._video.muted = true;
       this._video.currentTime = this._audio?.currentTime ?? 0;
       if (this.playing) await this._video.play();
@@ -595,11 +536,12 @@ export const usePlayerStore = defineStore("player", {
       if (this.mvEnabled && this._video) {
         const t = this._video.currentTime;
         const wasPlaying = !this._video.paused;
-        this._video.src = stream.stream_url;
+        this._video.src = playUrl(this.currentTrack.id, "video", stream.quality_id);
         this._video.currentTime = t;
         if (wasPlaying) await this._video.play();
       }
-      if (this.currentTrack) this._maybeAutoDownload(this.currentTrack.id);
+      // 切档后重拉 plan:补缓存决策由后端给出
+      this._syncPlanDownload();
     },
 
     _startSync() {
@@ -664,142 +606,9 @@ export const usePlayerStore = defineStore("player", {
       }
     },
 
-    /** 每次播放后异步检查远程档位并合并进下拉(失败静默)。
-     *  也用于登录/登出后刷新当前曲目(凭证已热更新)。 */
+    /** 登录/登出后刷新当前曲目的档位与补缓存决策(凭证已热更新)。 */
     async refreshResolvedStreams() {
-      const track = this.currentTrack;
-      if (!track || !this.resolved) return;
-      await this._checkRemoteStreams(track, this.currentIndex);
-    },
-
-    async _checkRemoteStreams(track, index) {
-      try {
-        const remote = await resolveTrack(track.id);
-        if (this.currentIndex !== index || !this.resolved) return; // 期间已切歌
-        this._mergeRemoteStreams(track.id, remote);
-        // 自动补缓存:本地最高档低于期望档(含降级)时后台补下
-        this._maybeAutoDownload(track.id);
-      } catch {
-        /* 远程解析失败:保持现有档位 */
-      }
-    },
-
-    /** 档位顺序值:音质按顺序表,视频按数值 */
-    _orderOf(qualityId, kind) {
-      if (kind === "audio") {
-        const idx = QUALITY_ORDER.indexOf(qualityId);
-        return idx >= 0 ? idx : 99;
-      }
-      return qualityId;
-    },
-
-    /** 期望档选择:wantId<0 取最高;存在则用;否则降级到不高于期望的最高档 */
-    _pickDesiredStream(streams, wantId, kind) {
-      if (!streams.length) return null;
-      if (wantId < 0) return streams[streams.length - 1];
-      const exact = streams.find((s) => s.quality_id === wantId);
-      if (exact) return exact;
-      const lower = streams.filter(
-        (s) => this._orderOf(s.quality_id, kind) <= this._orderOf(wantId, kind)
-      );
-      return lower.length ? lower[lower.length - 1] : streams[0];
-    },
-
-    /** 自动补缓存规则:本地最高档低于期望档(自动=曲目最高,显式=该档或降级)
-     *  时才补下;期望档已满足(甚至本地更高)不补。 */
-    _maybeAutoDownload(trackId) {
-      const status = this.cacheStatus[trackId] || {
-        local_qualities: [],
-        local_videos: [],
-      };
-      const audioStreams = this.resolved?.audio_streams || [];
-      if (audioStreams.length) {
-        const want = this._pickDesiredStream(audioStreams, this.qualityId, "audio");
-        const localBest =
-          (status.local_qualities || []).length
-            ? status.local_qualities[status.local_qualities.length - 1]
-            : null;
-        const need =
-          want &&
-          (!localBest ||
-            this._orderOf(want.quality_id, "audio") >
-              this._orderOf(localBest.quality_id, "audio"));
-        if (need) {
-          this._queueCache([trackId], {
-            priority: true,
-            force: true,
-            desired_audio: want.quality_id,
-            desired_video: -2, // 只补音频
-          });
-        }
-      }
-      const videoStreams = this.resolved?.video_streams || [];
-      if (videoStreams.length) {
-        const want = this._pickDesiredStream(videoStreams, this.videoQualityId, "video");
-        const localBest =
-          (status.local_videos || []).length
-            ? status.local_videos[status.local_videos.length - 1]
-            : null;
-        const need =
-          want &&
-          (!localBest ||
-            this._orderOf(want.quality_id, "video") >
-              this._orderOf(localBest.quality_id, "video"));
-        if (need) {
-          this._queueCache([trackId], {
-            priority: true,
-            force: true,
-            desired_audio: -2, // 只补视频
-            desired_video: want.quality_id,
-          });
-        }
-      }
-    },
-
-    /** 合并「本地档 + 远程档」到下拉:本地档带 local 标记排前,远程新档补充 */
-    _mergeRemoteStreams(trackId, remote) {
-      const status = this.cacheStatus[trackId] || {
-        local_qualities: [],
-        local_videos: [],
-      };
-      const audio = [
-        ...this._localAudioStreams(trackId, status.local_qualities || []).map(
-          (s) => ({ ...s, local: true })
-        ),
-        ...remote.audio_streams
-          .filter(
-            (s) =>
-              !(status.local_qualities || []).some(
-                (q) => q.quality_id === s.quality_id
-              )
-          )
-          .map((s) => ({ ...s, local: false })),
-      ];
-      audio.sort((a, b) => {
-        const oa = QUALITY_ORDER.indexOf(a.quality_id);
-        const ob = QUALITY_ORDER.indexOf(b.quality_id);
-        return (oa < 0 ? 99 : oa) - (ob < 0 ? 99 : ob);
-      });
-      this.resolved.audio_streams = audio;
-
-      const video = [
-        ...this._localVideoStreams(trackId, status.local_videos || []).map(
-          (s) => ({ ...s, local: true })
-        ),
-        ...remote.video_streams
-          .filter(
-            (s) =>
-              !(status.local_videos || []).some(
-                (q) => q.quality_id === s.quality_id
-              )
-          )
-          .map((s) => ({ ...s, local: false })),
-      ];
-      video.sort((a, b) => a.quality_id - b.quality_id);
-      this.resolved.video_streams = video;
-
-      this._applyQualityId();
-      this._applyVideoQualityId();
+      await this._syncPlanDownload();
     },
 
     /** 删除单曲本地缓存 */
@@ -808,32 +617,6 @@ export const usePlayerStore = defineStore("player", {
       await this.refreshCacheStatus();
     },
 
-    /** 本地缓存文件失效(被删)时自动回退远程播放并重新排队下载 */
-    async _fallbackToRemote() {
-      if (this._fallingBack) return; // 防 error 事件连续触发重入
-      this._fallingBack = true;
-      try {
-        const track = this.currentTrack;
-        if (!track) return;
-        this.error = "本地缓存失效,已回退远程播放";
-        const t = this._audio?.currentTime ?? 0;
-        const wasPlaying = this.playing;
-        const resolved = await resolveTrack(track.id);
-        if (this.currentTrack?.id !== track.id) return; // 期间已切歌
-        this.resolved = resolved;
-        this._applyQualityId();
-        this._applyVideoQualityId();
-        this._loadStream();
-        if (this._audio) this._audio.currentTime = t;
-        if (wasPlaying) await this._audio?.play();
-        // 文件已被删,重新排队下载
-        this._queueCache([track.id], { priority: true });
-      } catch (e) {
-        this.error = `本地缓存失效且远程不可用: ${e.message}`;
-      } finally {
-        this._fallingBack = false;
-      }
-    },
 
     // -------------------------------------------------- 内部
     _onEnded() {
