@@ -1,19 +1,55 @@
 <script setup>
+import { onMounted, onUnmounted, ref } from "vue";
 import { usePlayerStore } from "../stores/player";
-import { formatTime } from "../api";
+import { formatTime, getUserInfo } from "../api";
 
-defineProps({
+const props = defineProps({
   items: { type: Array, default: () => [] },
   loading: Boolean,
   hasMore: Boolean,
   error: String,
 });
-const emit = defineEmits(["play", "add", "loadMore"]);
+const emit = defineEmits(["play", "add", "loadMore", "open-user"]);
 
 const store = usePlayerStore();
 
 function isCurrent(track) {
   return store.currentTrack?.id === track.id;
+}
+
+// 无限滚动:哨兵进入视口自动加载更多(父级负责防抖)
+const sentinel = ref(null);
+let observer = null;
+
+onMounted(() => {
+  observer = new IntersectionObserver((entries) => {
+    if (entries[0]?.isIntersecting) emit("loadMore");
+  });
+  if (sentinel.value) observer.observe(sentinel.value);
+});
+onUnmounted(() => observer?.disconnect());
+
+// UP 主悬停预览:悬停 400ms 后拉取信息显示浮层
+const hoverUser = ref(null); // { mid, info }
+let hoverTimer = null;
+
+function onArtistEnter(track) {
+  if (!track.mid) return;
+  clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(async () => {
+    try {
+      const info = await getUserInfo(track.mid);
+      if (hoverUser.value?.mid === track.mid) return;
+      hoverUser.value = { mid: track.mid, info };
+    } catch {
+      /* 静默 */
+    }
+  }, 400);
+}
+
+function onArtistLeave() {
+  clearTimeout(hoverTimer);
+  hoverUser.value = null;
 }
 </script>
 
@@ -40,7 +76,33 @@ function isCurrent(track) {
         <div class="meta">
           <div class="title ellipsis">{{ track.title }}</div>
           <div class="sub ellipsis">
-            <span class="artist">{{ track.artist || "未知 UP 主" }}</span>
+            <span
+              class="artist"
+              :class="{ clickable: track.mid }"
+              :title="track.mid ? '悬停查看 UP 主信息,点击进入主页' : ''"
+              @mouseenter="onArtistEnter(track)"
+              @mouseleave="onArtistLeave"
+              @click.stop="track.mid && emit('open-user', track.mid)"
+            >
+              {{ track.artist || "未知 UP 主" }}
+              <!-- 悬停预览浮层 -->
+              <span
+                v-if="hoverUser?.mid === track.mid && hoverUser.info"
+                class="hover-card"
+                @click.stop="emit('open-user', track.mid)"
+              >
+                <img class="hc-face" :src="hoverUser.info.face" alt="" />
+                <span class="hc-meta">
+                  <span class="hc-name">{{ hoverUser.info.name }}</span>
+                  <span class="hc-fans">
+                    粉丝 {{ (hoverUser.info.fans ?? 0).toLocaleString() }}
+                  </span>
+                  <span class="hc-sign ellipsis">
+                    {{ hoverUser.info.sign || "这个人很懒,什么都没写" }}
+                  </span>
+                </span>
+              </span>
+            </span>
             <span class="dot">·</span>
             <span>{{ track.source }}</span>
           </div>
@@ -55,6 +117,8 @@ function isCurrent(track) {
       </div>
     </div>
 
+    <!-- 滚动哨兵:进入视口自动加载(无限滚动) -->
+    <div v-if="hasMore" ref="sentinel" class="sentinel"></div>
     <div v-if="hasMore" class="load-more">
       <button class="load-btn" :disabled="loading" @click="emit('loadMore')">
         {{ loading ? "加载中…" : "加载更多" }}
@@ -157,14 +221,68 @@ function isCurrent(track) {
 }
 .artist {
   color: var(--accent);
+  position: relative;
+}
+.artist.clickable {
+  cursor: pointer;
+}
+.artist.clickable:hover {
+  text-decoration: underline;
 }
 .dot {
   opacity: 0.5;
+}
+/* 悬停预览浮层 */
+.hover-card {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 60;
+  display: flex;
+  gap: 10px;
+  width: 260px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  text-decoration: none;
+}
+.hc-face {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.hc-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+.hc-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.hc-fans {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.hc-sign {
+  font-size: 11px;
+  color: var(--text-dim);
+  max-width: 180px;
 }
 .add-btn {
   flex-shrink: 0;
   font-size: 20px;
   font-weight: 300;
+}
+.sentinel {
+  height: 2px;
 }
 .load-more {
   text-align: center;

@@ -24,6 +24,7 @@ data/
 
 # 与项目无关的本地知识库索引
 .joydesk/
+.claude/
 
 # 系统文件
 .DS_Store

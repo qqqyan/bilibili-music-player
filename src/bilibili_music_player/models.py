@@ -12,6 +12,7 @@ class TrackInfo(BaseModel):
     id: str  # bvBVxxx
     title: str
     artist: str  # UP 主
+    mid: int = 0  # UP 主 ID(0 = 未知;悬停预览/进入主页用)
     cover: str  # 封面 URL
     duration: int  # 时长(秒)
     source: str  # 来源标签,如 "bilibili 视频"

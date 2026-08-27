@@ -49,6 +49,7 @@ export const usePlayerStore = defineStore("player", {
       videoQualityId: -1, // 用户期望画质档 ID(-1 = 自动),跨曲目保持
       cacheStatus: {}, // track_id -> 缓存状态
       cacheTotalSize: 0, // 本地缓存占用(字节)
+      offline: false, // 后端不可达(状态轮询失败时置位,恢复自动清除)
       settings: { cleanup_old_quality: false },
       mvEnabled: false,
       mvReady: false,
@@ -148,7 +149,7 @@ export const usePlayerStore = defineStore("player", {
       await this.refreshCacheStatus();
     },
 
-    /** 拉取全部缓存状态(下载进度等) */
+    /** 拉取全部缓存状态(下载进度等);顺带维护离线标志 */
     async refreshCacheStatus() {
       try {
         const data = await getAllCache();
@@ -156,8 +157,9 @@ export const usePlayerStore = defineStore("player", {
           this.cacheStatus[item.track_id] = item;
         }
         this.cacheTotalSize = data.total_size || 0;
+        this.offline = false;
       } catch {
-        /* 后端不可达静默 */
+        this.offline = true; // 顶栏显示离线提示,轮询恢复后自动消失
       }
     },
 
@@ -231,8 +233,19 @@ export const usePlayerStore = defineStore("player", {
       const track = this.playlist[index];
       this.playlist.splice(index, 1);
       if (this.currentIndex === index) {
+        // 删除正在播放的曲目:彻底清场(MV 画面/进度/档位列表)
         this.stop();
+        this._teardownMv();
+        // 清空音频源:否则残留的 timeupdate 事件会把进度改回旧值
+        if (this._audio) {
+          this._audio.removeAttribute("src");
+          this._audio.load();
+        }
         this.currentIndex = -1;
+        this.resolved = null;
+        this.currentTime = 0;
+        this.duration = 0;
+        this.error = "";
       } else if (this.currentIndex > index) {
         this.currentIndex -= 1;
       }
@@ -267,8 +280,8 @@ export const usePlayerStore = defineStore("player", {
     async playTrack(index, record = true) {
       const track = this.playlist[index];
       if (!track) return;
-      // 点击正在播放的曲目:不打断播放
-      if (index === this.currentIndex && this.resolved) {
+      // 点击正在播放的曲目:不打断播放(加载中除外,可重试)
+      if (index === this.currentIndex && this.resolved && !this._loading) {
         return;
       }
       // 点播优先由后端处理:plan 接口调用即提队首
@@ -277,7 +290,7 @@ export const usePlayerStore = defineStore("player", {
         if (this._history.length > 10000) this._history.shift();
       }
       this.currentIndex = index;
-      this.resolved = null;
+      // 保留旧 resolved(档位下拉不闪烁/按钮不跳位),新 plan 返回后覆盖
       this.playing = false;
       this.mvReady = false;
       // 注意:mvEnabled 是「模式」,跨曲目保持,不在切歌时重置
@@ -290,7 +303,17 @@ export const usePlayerStore = defineStore("player", {
           audioQuality: this.qualityId,
           videoQuality: this.videoQualityId,
         });
-        if (this.currentIndex !== index) return; // 用户已切歌,丢弃过期结果
+        // 补缓存决策:拿到即执行,不随「切歌丢弃」一起丢
+        // (快速连点多首时,每一首的下载任务都必须入队)
+        if (plan.download?.audio != null || plan.download?.video != null) {
+          this._queueCache([track.id], {
+            priority: true,
+            force: true,
+            desired_audio: plan.download.audio ?? -2,
+            desired_video: plan.download.video ?? -2,
+          });
+        }
+        if (this.currentIndex !== index) return; // 用户已切歌,丢弃播放部分
         this.resolved = {
           id: plan.track.id,
           title: plan.track.title,
@@ -307,16 +330,6 @@ export const usePlayerStore = defineStore("player", {
         await this._audio.play();
         // MV 模式开启时,播到视频曲目自动续画面(模式跨曲目保持)
         if (this.mvEnabled) await this._startMv(track);
-        // 按后端补缓存决策触发下载(音频+视频合并为一次入队:
-        // 分两次入队时第二次会被「已入队跳过」,导致视频补下丢失)
-        if (plan.download?.audio != null || plan.download?.video != null) {
-          this._queueCache([track.id], {
-            priority: true,
-            force: true,
-            desired_audio: plan.download.audio ?? -2,
-            desired_video: plan.download.video ?? -2,
-          });
-        }
       } catch (e) {
         this.error = `解析失败: ${e.message}`;
       } finally {

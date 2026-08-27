@@ -1,11 +1,22 @@
 <script setup>
-import { computed, ref } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { usePlayerStore } from "../stores/player";
 import { formatTime } from "../api";
 import DownloadDialog from "./DownloadDialog.vue";
 
 const store = usePlayerStore();
 const showDownloadDialog = ref(false);
+
+// 切歌时把当前曲目滚动到可视区域
+const listEl = ref(null);
+watch(
+  () => store.currentIndex,
+  async () => {
+    await nextTick();
+    const el = listEl.value?.querySelector(".row.current");
+    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+);
 
 // 列表内搜索:匹配歌曲名 + UP 主名(保留原始索引供播放)
 const filterText = ref("");
@@ -66,7 +77,7 @@ async function onDownloadConfirm({ audio, video }) {
       搜索并点击「+」加入列表
     </div>
 
-    <div v-else class="list">
+    <div v-else ref="listEl" class="list">
       <div
         v-for="item in filtered"
         :key="item.track.id"

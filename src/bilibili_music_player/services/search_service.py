@@ -38,8 +38,9 @@ def _video_search_item_to_track(it: dict, source: str) -> TrackInfo:
         id=f"bv{it['bvid']}",
         title=strip_em(first(it, "title", "name")),
         artist=first(it, "author", "uname", "up_name"),
+        mid=int(it.get("mid") or 0),  # UP 主 ID(悬停预览/主页跳转)
         cover=abs_url(first(it, "pic", "cover")),
-        duration=parse_duration(it.get("duration")),
+        duration=parse_duration(it.get("duration") or it.get("length")),
         source=source,
     )
 

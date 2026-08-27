@@ -25,6 +25,21 @@ export function resolveTrack(id) {
   return request(`/api/resolve/${id}`);
 }
 
+/** 搜索 UP 主 */
+export function searchUsers(keyword, page = 1) {
+  return request(`/api/users/search?keyword=${encodeURIComponent(keyword)}&page=${page}`);
+}
+
+/** UP 主主页:信息 + 投稿视频(分页) */
+export function getUserProfile(mid, page = 1) {
+  return request(`/api/user/${mid}?page=${page}`);
+}
+
+/** UP 主信息(轻量,悬停预览用) */
+export function getUserInfo(mid) {
+  return request(`/api/user/${mid}/info`);
+}
+
 /** 播放决策接口:合并档位列表 + 播放来源决策 + 补缓存决策 */
 export function trackPlan(id, { audioQuality = -1, videoQuality = -1 } = {}) {
   return request(

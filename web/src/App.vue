@@ -1,12 +1,13 @@
 <script setup>
 import { onMounted, ref } from "vue";
 import { usePlayerStore } from "./stores/player";
-import { authLogout, authStatus, searchTracks } from "./api";
+import { authLogout, authStatus, getUserProfile, searchTracks, searchUsers } from "./api";
 import SearchBar from "./components/SearchBar.vue";
 import SearchResults from "./components/SearchResults.vue";
 import Playlist from "./components/Playlist.vue";
 import PlayerBar from "./components/PlayerBar.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
+import UserProfile from "./components/UserProfile.vue";
 
 const store = usePlayerStore();
 const audioEl = ref(null);
@@ -19,6 +20,9 @@ const searching = ref(false);
 const searchError = ref("");
 const keyword = ref("");
 const page = ref(1);
+// UP 主:搜索结果区 + 主页视图
+const users = ref([]);
+const userView = ref(null); // { user, videos, hasMore, page, loading, error }
 
 // 登录状态与设置面板
 const auth = ref({ logged_in: false, user: null });
@@ -65,15 +69,57 @@ async function doSearch(kw) {
   page.value = 1;
   searching.value = true;
   searchError.value = "";
+  userView.value = null; // 新搜索退出 UP 主页
   try {
-    const data = await searchTracks(kw, 1);
+    const [data, upList] = await Promise.all([
+      searchTracks(kw, 1),
+      searchUsers(kw, 1).catch(() => []),
+    ]);
     results.value = data.items;
     hasMore.value = data.has_more;
+    users.value = upList;
   } catch (e) {
     results.value = [];
     searchError.value = e.message;
   } finally {
     searching.value = false;
+  }
+}
+
+/** 进入 UP 主主页 */
+async function openUser(mid) {
+  userView.value = { user: null, videos: [], hasMore: false, page: 1, loading: true, error: "" };
+  try {
+    const data = await getUserProfile(mid, 1);
+    userView.value.user = data.user;
+    userView.value.videos = data.videos;
+    userView.value.hasMore = data.has_more;
+    userView.value.page = 1;
+  } catch (e) {
+    userView.value.error = e.message;
+  } finally {
+    userView.value.loading = false;
+  }
+}
+
+function backToSearch() {
+  userView.value = null;
+}
+
+/** UP 主页加载更多投稿 */
+async function loadMoreUserVideos() {
+  const view = userView.value;
+  if (!view || view.loading || !view.hasMore) return;
+  view.loading = true;
+  try {
+    const data = await getUserProfile(view.user.mid, view.page + 1);
+    view.videos.push(...data.videos);
+    view.hasMore = data.has_more;
+    view.page += 1;
+  } catch (e) {
+    view.error = e.message;
+  } finally {
+    view.loading = false;
   }
 }
 
@@ -99,6 +145,8 @@ function clearSearch() {
   hasMore.value = false;
   searchError.value = "";
   page.value = 1;
+  users.value = [];
+  userView.value = null;
 }
 </script>
 
@@ -115,6 +163,9 @@ function clearSearch() {
         @search="doSearch"
         @clear="clearSearch"
       />
+      <span v-if="store.offline" class="offline-badge" title="后端服务不可达,自动重试中">
+        ⚠ 后端离线,重试中…
+      </span>
       <div class="auth-area">
         <template v-if="auth.logged_in">
           <img
@@ -156,15 +207,49 @@ function clearSearch() {
             </div>
           </div>
         </Transition>
-        <SearchResults
-          :items="results"
-          :loading="searching"
-          :has-more="hasMore"
-          :error="searchError"
+        <!-- UP 主主页视图(始终渲染组件,加载状态内部展示,避免卸载导致滚动跳顶) -->
+        <UserProfile
+          v-if="userView"
+          :user="userView.user"
+          :videos="userView.videos"
+          :has-more="userView.hasMore"
+          :loading="userView.loading"
+          :error="userView.error"
+          @back="backToSearch"
           @play="store.playFromSearch"
           @add="(t) => store.addTrack(t)"
-          @load-more="loadMore"
+          @load-more="loadMoreUserVideos"
+          @open-user="openUser"
         />
+
+        <!-- 搜索结果视图 -->
+        <template v-else>
+          <div v-if="users.length" class="users-bar">
+            <div
+              v-for="u in users"
+              :key="u.mid"
+              class="user-card"
+              title="查看该 UP 主全部视频"
+              @click="openUser(u.mid)"
+            >
+              <img class="u-face" :src="u.face" alt="" />
+              <div class="u-meta">
+                <div class="u-name ellipsis">{{ u.name }}</div>
+                <div class="u-fans">粉丝 {{ (u.fans ?? 0).toLocaleString() }}</div>
+              </div>
+            </div>
+          </div>
+          <SearchResults
+            :items="results"
+            :loading="searching"
+            :has-more="hasMore"
+            :error="searchError"
+            @play="store.playFromSearch"
+            @add="(t) => store.addTrack(t)"
+            @load-more="loadMore"
+            @open-user="openUser"
+          />
+        </template>
       </section>
 
       <aside class="right">
@@ -213,8 +298,23 @@ function clearSearch() {
   white-space: nowrap;
 }
 
-.auth-area {
+.offline-badge {
   margin-left: auto;
+  font-size: 12px;
+  color: #e5a96d;
+  white-space: nowrap;
+  animation: offline-pulse 2s ease-in-out infinite;
+}
+@keyframes offline-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+.auth-area {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -320,5 +420,68 @@ function clearSearch() {
 .mv-fade-enter-from,
 .mv-fade-leave-to {
   opacity: 0;
+}
+
+/* UP 主卡片横条 */
+.users-bar {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+  margin-bottom: 6px;
+}
+.user-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.15s;
+}
+.user-card:hover {
+  border-color: var(--accent);
+}
+.u-face {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.u-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 140px;
+}
+.u-name {
+  font-size: 13px;
+}
+.u-fans {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.view-hint {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--text-dim);
+}
+.view-hint.error {
+  color: #e56d6d;
+}
+.text-btn {
+  margin-top: 10px;
+  padding: 6px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.text-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 </style>
