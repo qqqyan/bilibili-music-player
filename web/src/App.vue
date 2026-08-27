@@ -13,6 +13,18 @@ const store = usePlayerStore();
 const audioEl = ref(null);
 const videoEl = ref(null);
 
+// 左栏滚动容器:新搜索回顶 + 「回到顶部」悬浮按钮
+const leftEl = ref(null);
+const showBackTop = ref(false);
+
+function onLeftScroll() {
+  showBackTop.value = (leftEl.value?.scrollTop ?? 0) > 400;
+}
+
+function scrollToTop() {
+  leftEl.value?.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 // 搜索状态
 const results = ref([]);
 const hasMore = ref(false);
@@ -70,6 +82,7 @@ async function doSearch(kw) {
   searching.value = true;
   searchError.value = "";
   userView.value = null; // 新搜索退出 UP 主页
+  leftEl.value?.scrollTo({ top: 0 }); // 新搜索回到列表顶部
   try {
     const [data, upList] = await Promise.all([
       searchTracks(kw, 1),
@@ -89,6 +102,7 @@ async function doSearch(kw) {
 /** 进入 UP 主主页 */
 async function openUser(mid) {
   userView.value = { user: null, videos: [], hasMore: false, page: 1, loading: true, error: "" };
+  leftEl.value?.scrollTo({ top: 0 }); // 从列表底部进入主页时回到顶部
   try {
     const data = await getUserProfile(mid, 1);
     userView.value.user = data.user;
@@ -192,7 +206,7 @@ function clearSearch() {
     </header>
 
     <main class="main">
-      <section class="left">
+      <section ref="leftEl" class="left" @scroll="onLeftScroll">
         <!-- MV 画面区(MV 模式开启且有画面流时显示) -->
         <!-- 注意:必须用 v-show 保持 video 元素常驻 DOM,否则首次开启前
              videoEl 为 null,store 无法操控元素 -->
@@ -250,6 +264,16 @@ function clearSearch() {
             @open-user="openUser"
           />
         </template>
+
+        <!-- 「回到顶部」悬浮按钮:滚动一段距离后才显示 -->
+        <button
+          v-show="showBackTop"
+          class="back-top"
+          title="回到顶部"
+          @click="scrollToTop"
+        >
+          ↑ 回到顶部
+        </button>
       </section>
 
       <aside class="right">
@@ -373,6 +397,26 @@ function clearSearch() {
 .left {
   overflow-y: auto;
   padding-right: 4px;
+}
+
+.back-top {
+  position: sticky;
+  bottom: 16px;
+  margin-left: auto;
+  width: fit-content;
+  padding: 8px 18px;
+  border-radius: 18px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+  transition: all 0.15s;
+}
+.back-top:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .mv-box {
