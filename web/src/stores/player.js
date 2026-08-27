@@ -228,6 +228,7 @@ export const usePlayerStore = defineStore("player", {
     },
 
     removeTrack(index) {
+      const track = this.playlist[index];
       this.playlist.splice(index, 1);
       if (this.currentIndex === index) {
         this.stop();
@@ -239,6 +240,11 @@ export const usePlayerStore = defineStore("player", {
       if (this.mode === "shuffle") this._buildShuffleQueue();
       this._history = [];
       this._savePlaylist();
+      // 优化项:移除歌曲同步删除其本地缓存
+      if (track) {
+        deleteCacheTrack(track.id).catch(() => {});
+        this.refreshCacheStatus();
+      }
     },
 
     clearPlaylist() {

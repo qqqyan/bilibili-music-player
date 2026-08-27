@@ -1,11 +1,24 @@
 <script setup>
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { usePlayerStore } from "../stores/player";
 import { formatTime } from "../api";
 import DownloadDialog from "./DownloadDialog.vue";
 
 const store = usePlayerStore();
 const showDownloadDialog = ref(false);
+
+// 列表内搜索:匹配歌曲名 + UP 主名(保留原始索引供播放)
+const filterText = ref("");
+const filtered = computed(() => {
+  const kw = filterText.value.trim().toLowerCase();
+  const items = store.playlist.map((track, index) => ({ track, index }));
+  if (!kw) return items;
+  return items.filter(
+    ({ track }) =>
+      track.title.toLowerCase().includes(kw) ||
+      (track.artist || "").toLowerCase().includes(kw)
+  );
+});
 
 function cacheState(track) {
   return store.cacheStatus[track.id] || { state: "none", local_qualities: [] };
@@ -22,6 +35,13 @@ async function onDownloadConfirm({ audio, video }) {
     <div class="head">
       <span class="head-title">播放列表</span>
       <span class="count">{{ store.playlist.length }} 首</span>
+      <input
+        v-if="store.playlist.length"
+        v-model="filterText"
+        class="filter-input"
+        type="text"
+        placeholder="搜索歌曲 / UP 主"
+      />
       <button
         v-if="store.playlist.length"
         class="head-btn"
@@ -48,50 +68,50 @@ async function onDownloadConfirm({ audio, video }) {
 
     <div v-else class="list">
       <div
-        v-for="(track, i) in store.playlist"
-        :key="track.id"
+        v-for="item in filtered"
+        :key="item.track.id"
         class="row"
-        :class="{ current: i === store.currentIndex }"
-        @click="store.playTrack(i)"
+        :class="{ current: item.index === store.currentIndex }"
+        @click="store.playTrack(item.index)"
       >
-        <span class="idx">{{ i === store.currentIndex ? "♪" : i + 1 }}</span>
-        <img class="thumb" :src="track.cover" alt="" />
+        <span class="idx">{{ item.index === store.currentIndex ? "♪" : item.index + 1 }}</span>
+        <img class="thumb" :src="item.track.cover" alt="" />
         <div class="meta">
-          <div class="title ellipsis">{{ track.title }}</div>
-          <div class="artist ellipsis">{{ track.artist || "未知 UP 主" }}</div>
+          <div class="title ellipsis">{{ item.track.title }}</div>
+          <div class="artist ellipsis">{{ item.track.artist || "未知 UP 主" }}</div>
         </div>
-        <span class="dur">{{ formatTime(track.duration) }}</span>
+        <span class="dur">{{ formatTime(item.track.duration) }}</span>
         <span
-          v-if="cacheState(track).state === 'failed'"
+          v-if="cacheState(item.track).state === 'failed'"
           class="cache-icon failed"
           title="下载失败,点击重试"
-          @click.stop="store.retryDownload(track.id)"
+          @click.stop="store.retryDownload(item.track.id)"
         >
           !
         </span>
         <span
-          v-else-if="cacheState(track).state === 'checking'"
+          v-else-if="cacheState(item.track).state === 'checking'"
           class="cache-icon checking"
           title="检查档位中"
         >
           ⟳
         </span>
         <span
-          v-else-if="cacheState(track).state === 'downloading'"
+          v-else-if="cacheState(item.track).state === 'downloading'"
           class="cache-icon downloading"
           title="下载中"
         >
           ↓
         </span>
         <span
-          v-else-if="cacheState(track).state === 'pending'"
+          v-else-if="cacheState(item.track).state === 'pending'"
           class="cache-icon pending"
           title="等待下载"
         >
           ◷
         </span>
         <span
-          v-else-if="cacheState(track).state === 'done'"
+          v-else-if="cacheState(item.track).state === 'done'"
           class="cache-icon done"
           title="已缓存到本地"
         >
@@ -100,7 +120,7 @@ async function onDownloadConfirm({ audio, video }) {
         <button
           class="icon-btn del-btn"
           title="从列表移除"
-          @click.stop="store.removeTrack(i)"
+          @click.stop="store.removeTrack(item.index)"
         >
           ✕
         </button>
@@ -134,6 +154,20 @@ async function onDownloadConfirm({ audio, video }) {
 .count {
   color: var(--text-dim);
   font-size: 12px;
+}
+.filter-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 13px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  outline: none;
+  font-size: 12px;
+}
+.filter-input:focus {
+  border-color: var(--accent);
 }
 .clear-btn {
   margin-left: auto;
