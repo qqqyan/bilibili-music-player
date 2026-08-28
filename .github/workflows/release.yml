@@ -1,10 +1,13 @@
 name: release
 
-# 推送 v* 标签(如 v0.1.0)时自动构建各平台开箱即用包并发布到 GitHub Release
+# 推送 v* 标签(如 v0.1.0)时自动构建各平台开箱即用包并发布到 GitHub Release。
+# 在网页手动发布 Release 同样会触发构建并上传二进制。
 on:
   push:
     tags:
       - "v*"
+  release:
+    types: [published]
   workflow_dispatch: {}
 
 jobs:
