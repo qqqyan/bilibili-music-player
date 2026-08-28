@@ -50,7 +50,12 @@ export const usePlayerStore = defineStore("player", {
       cacheStatus: {}, // track_id -> 缓存状态
       cacheTotalSize: 0, // 本地缓存占用(字节)
       offline: false, // 后端不可达(状态轮询失败时置位,恢复自动清除)
-      settings: { cleanup_old_quality: false },
+      settings: {
+        cleanup_old_quality: false,
+        auto_add_on_play: true, // 从搜索结果点播时自动加入播放列表
+        auto_cache_on_play: true, // 播放时自动缓存(仅列表内曲目)
+      },
+      externalTrack: null, // 临时播放(未入列表)的曲目,currentTrack 回退用
       mvEnabled: false,
       mvReady: false,
       _tearingDown: false,
@@ -68,7 +73,7 @@ export const usePlayerStore = defineStore("player", {
     currentTrack: (s) =>
       s.currentIndex >= 0 && s.currentIndex < s.playlist.length
         ? s.playlist[s.currentIndex]
-        : null,
+        : s.externalTrack,
     currentStream: (s) => {
       if (!s.resolved || !s.resolved.audio_streams?.length) return null;
       const idx =
@@ -289,6 +294,12 @@ export const usePlayerStore = defineStore("player", {
         this._history.push(this.currentIndex); // 记住来的地方
         if (this._history.length > 10000) this._history.shift();
       }
+      this.externalTrack = null; // 回到列表内播放
+      await this._playTrackObject(track, index);
+    },
+
+    /** 播放主体:track + 列表索引(外部临时播放时索引为 -1) */
+    async _playTrackObject(track, index) {
       this.currentIndex = index;
       // 保留旧 resolved(档位下拉不闪烁/按钮不跳位),新 plan 返回后覆盖
       this.playing = false;
@@ -305,7 +316,10 @@ export const usePlayerStore = defineStore("player", {
         });
         // 补缓存决策:拿到即执行,不随「切歌丢弃」一起丢
         // (快速连点多首时,每一首的下载任务都必须入队)
-        if (plan.download?.audio != null || plan.download?.video != null) {
+        if (
+          this._autoCacheAllowed(track) &&
+          (plan.download?.audio != null || plan.download?.video != null)
+        ) {
           this._queueCache([track.id], {
             priority: true,
             force: true,
@@ -313,7 +327,7 @@ export const usePlayerStore = defineStore("player", {
             desired_video: plan.download.video ?? -2,
           });
         }
-        if (this.currentIndex !== index) return; // 用户已切歌,丢弃播放部分
+        if (this.currentTrack?.id !== track.id) return; // 用户已切歌,丢弃播放部分
         this.resolved = {
           id: plan.track.id,
           title: plan.track.title,
@@ -371,14 +385,35 @@ export const usePlayerStore = defineStore("player", {
       this.videoIndex = idx >= 0 ? idx : streams.length - 1;
     },
 
-    /** 搜索结果直接播放:不存在则先加入列表 */
+    /** 搜索结果直接播放:不存在时按设置决定是否加入列表
+     *  (关闭「自动加入」则为临时播放,不入列表、不自动缓存) */
     async playFromSearch(track) {
       let index = this.playlist.findIndex((t) => t.id === track.id);
       if (index < 0) {
-        this.addTrack(track);
-        index = this.playlist.length - 1;
+        if (this.settings.auto_add_on_play !== false) {
+          this.addTrack(track);
+          index = this.playlist.length - 1;
+        } else {
+          await this._playExternal(track);
+          return;
+        }
       }
       await this.playTrack(index);
+    },
+
+    /** 临时播放(不入列表):currentIndex 置 -1,列表无高亮 */
+    async _playExternal(track) {
+      this.externalTrack = track;
+      await this._playTrackObject(track, -1);
+    },
+
+    /** 是否允许播放触发的自动缓存:开关开启且曲目在播放列表内
+     *  (临时播放不入列表,强制不缓存——孤儿缓存用户无感知入口) */
+    _autoCacheAllowed(track) {
+      return (
+        this.settings.auto_cache_on_play !== false &&
+        this.playlist.some((t) => t.id === track.id)
+      );
     },
 
     /** 按当前音质装载媒体源 */
@@ -484,7 +519,10 @@ export const usePlayerStore = defineStore("player", {
         this.resolved.video_streams = plan.video_streams;
         this._applyQualityId();
         this._applyVideoQualityId();
-        if (plan.download?.audio != null || plan.download?.video != null) {
+        if (
+          this._autoCacheAllowed(track) &&
+          (plan.download?.audio != null || plan.download?.video != null)
+        ) {
           this._queueCache([track.id], {
             priority: true,
             force: true,
@@ -523,7 +561,7 @@ export const usePlayerStore = defineStore("player", {
           this.resolved.video_streams = plan.video_streams;
           if (!this.resolved.video_streams.length) return; // 该视频无画面,静默
           this._applyVideoQualityId();
-          if (plan.download?.video != null) {
+          if (this._autoCacheAllowed(track) && plan.download?.video != null) {
             this._queueCache([track.id], {
               priority: true,
               force: true,

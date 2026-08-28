@@ -34,6 +34,24 @@ async function doClearCache() {
   await store.clearAllCache();
 }
 
+/** 布尔开关保存(自动加入/自动缓存等) */
+async function saveBoolSetting(key, value) {
+  await store.saveSetting({ [key]: value });
+}
+
+/** 关闭「自动加入列表」时联动关闭「自动缓存」(用户可再单独打开) */
+async function onAutoAddChange(value) {
+  if (!value) {
+    store.settings.auto_cache_on_play = false;
+    await store.saveSetting({
+      auto_add_on_play: false,
+      auto_cache_on_play: false,
+    });
+  } else {
+    await store.saveSetting({ auto_add_on_play: true });
+  }
+}
+
 function doLogout() {
   // 二次确认,防止误点
   if (!confirm("确定退出登录吗?")) return;
@@ -76,6 +94,36 @@ function doLogout() {
               v-model="store.settings.cleanup_old_quality"
               type="checkbox"
               @change="toggleCleanup"
+            />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="row">
+          <div class="row-label">
+            <span>播放视频时自动加入播放列表</span>
+            <span class="desc">关闭后从搜索结果点播为临时播放,不留在列表;并联动关闭下方「自动缓存」</span>
+          </div>
+          <label class="switch">
+            <input
+              v-model="store.settings.auto_add_on_play"
+              type="checkbox"
+              @change="onAutoAddChange($event.target.checked)"
+            />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="row">
+          <div class="row-label">
+            <span>播放时自动缓存到本地</span>
+            <span class="desc">仅对播放列表内的曲目生效(临时播放不缓存),手动「下载全部」不受影响</span>
+          </div>
+          <label class="switch">
+            <input
+              v-model="store.settings.auto_cache_on_play"
+              type="checkbox"
+              @change="saveBoolSetting('auto_cache_on_play', $event.target.checked)"
             />
             <span class="slider"></span>
           </label>

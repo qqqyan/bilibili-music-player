@@ -9,6 +9,10 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 DEFAULTS: dict = {
     # 下载完成更高档后,自动删除同类型更低档的本地缓存
     "cleanup_old_quality": False,
+    # 从搜索结果点播时自动加入播放列表
+    "auto_add_on_play": True,
+    # 播放时自动缓存到本地(仅列表内曲目;临时播放联动不缓存)
+    "auto_cache_on_play": True,
 }
 
 

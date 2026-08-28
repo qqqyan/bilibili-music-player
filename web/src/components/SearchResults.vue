@@ -29,8 +29,8 @@ onMounted(() => {
 });
 onUnmounted(() => observer?.disconnect());
 
-// UP 主悬停预览:悬停 400ms 后拉取信息显示浮层
-const hoverUser = ref(null); // { mid, info }
+// UP 主悬停预览:悬停 20ms 后拉取信息显示浮层（感觉20够了，体验上挺好的）
+const hoverUser = ref(null); // { trackId, mid, info }
 let hoverTimer = null;
 
 function onArtistEnter(track) {
@@ -39,12 +39,12 @@ function onArtistEnter(track) {
   hoverTimer = setTimeout(async () => {
     try {
       const info = await getUserInfo(track.mid);
-      if (hoverUser.value?.mid === track.mid) return;
-      hoverUser.value = { mid: track.mid, info };
+      if (hoverUser.value?.trackId === track.id) return;
+      hoverUser.value = { trackId: track.id, mid: track.mid, info };
     } catch {
       /* 静默 */
     }
-  }, 400);
+  }, 20);
 }
 
 function onArtistLeave() {
@@ -67,6 +67,7 @@ function onArtistLeave() {
         class="item"
         :class="{ current: isCurrent(track) }"
         @click="emit('play', track)"
+        @mouseleave="onArtistLeave"
       >
         <div class="cover-box">
           <img class="cover" :src="track.cover" loading="lazy" alt="" />
@@ -81,32 +82,36 @@ function onArtistLeave() {
               :class="{ clickable: track.mid }"
               :title="track.mid ? '悬停查看 UP 主信息,点击进入主页' : ''"
               @mouseenter="onArtistEnter(track)"
-              @mouseleave="onArtistLeave"
               @click.stop="track.mid && emit('open-user', track.mid)"
             >
               {{ track.artist || "未知 UP 主" }}
-              <!-- 悬停预览浮层 -->
-              <span
-                v-if="hoverUser?.mid === track.mid && hoverUser.info"
-                class="hover-card"
-                @click.stop="emit('open-user', track.mid)"
-              >
-                <img class="hc-face" :src="hoverUser.info.face" alt="" />
-                <span class="hc-meta">
-                  <span class="hc-name">{{ hoverUser.info.name }}</span>
-                  <span class="hc-fans">
-                    粉丝 {{ (hoverUser.info.fans ?? 0).toLocaleString() }}
-                  </span>
-                  <span class="hc-sign ellipsis">
-                    {{ hoverUser.info.sign || "这个人很懒,什么都没写" }}
-                  </span>
-                </span>
-              </span>
             </span>
             <span class="dot">·</span>
             <span>{{ track.source }}</span>
           </div>
         </div>
+        <!-- 悬停预览浮层(item 级定位,避免被 .sub 的 overflow:hidden 裁剪) -->
+        <span
+          v-if="hoverUser?.trackId === track.id && hoverUser.info"
+          class="hover-card"
+          @click.stop="emit('open-user', track.mid)"
+        >
+          <img
+            class="hc-face"
+            :src="hoverUser.info.face"
+            alt=""
+            title="点击进入 UP 主页"
+          />
+          <span class="hc-meta">
+            <span class="hc-name">{{ hoverUser.info.name }}</span>
+            <span class="hc-fans">
+              粉丝 {{ (hoverUser.info.fans ?? 0).toLocaleString() }}
+            </span>
+            <span class="hc-sign ellipsis">
+              {{ hoverUser.info.sign || "这个人很懒,什么都没写" }}
+            </span>
+          </span>
+        </span>
         <button
           class="icon-btn add-btn"
           :title="'加入播放列表'"
@@ -149,6 +154,7 @@ function onArtistLeave() {
   gap: 8px;
 }
 .item {
+  position: relative; /* 悬停预览浮层的定位参考 */
   display: flex;
   align-items: center;
   gap: 12px;
@@ -235,8 +241,8 @@ function onArtistLeave() {
 /* 悬停预览浮层 */
 .hover-card {
   position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
+  bottom: 100%; /* 贴住整行顶部,不留空隙(方便鼠标移入) */
+  left: 128px; /* 对齐 meta 区左缘(8 padding + 108 封面 + 12 gap) */
   z-index: 60;
   display: flex;
   gap: 10px;
@@ -248,6 +254,16 @@ function onArtistLeave() {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   color: var(--text);
   text-decoration: none;
+  cursor: pointer;
+}
+/* 不可见的「桥」:覆盖卡片与名字之间的过渡区,鼠标移入卡片时不移出 item */
+.hover-card::before {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 8px;
 }
 .hc-face {
   width: 48px;
@@ -255,6 +271,7 @@ function onArtistLeave() {
   border-radius: 50%;
   object-fit: cover;
   flex-shrink: 0;
+  cursor: pointer;
 }
 .hc-meta {
   display: flex;
