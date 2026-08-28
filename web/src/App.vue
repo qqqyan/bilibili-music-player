@@ -191,9 +191,6 @@ function clearSearch() {
             @click="openSettings('account')"
           />
           <span class="nickname">{{ auth.user?.name || "已登录" }}</span>
-          <button class="logout-btn" title="退出登录" @click="doLogout">
-            退出
-          </button>
         </template>
         <button v-else class="login-btn" @click="openSettings('account')">
           登录
@@ -294,8 +291,10 @@ function clearSearch() {
     <SettingsDialog
       v-if="showSettings"
       :initial-tab="settingsTab"
+      :logged-in="auth.logged_in"
       @close="showSettings = false"
       @login-success="onLoginSuccess"
+      @logout="doLogout"
     />
   </div>
 </template>

@@ -5,6 +5,7 @@ import LoginDialog from "./LoginDialog.vue";
 
 const props = defineProps({
   initialTab: { type: String, default: "settings" }, // account / settings
+  loggedIn: { type: Boolean, default: false }, // 登录态,控制退出按钮显示
 });
 const emit = defineEmits(["close", "login-success", "logout"]);
 
@@ -32,6 +33,12 @@ async function doClearCache() {
   if (!confirm("确定清空全部本地缓存吗?")) return;
   await store.clearAllCache();
 }
+
+function doLogout() {
+  // 二次确认,防止误点
+  if (!confirm("确定退出登录吗?")) return;
+  emit("logout");
+}
 </script>
 
 <template>
@@ -54,6 +61,7 @@ async function doClearCache() {
       <!-- 账号 -->
       <div v-if="tab === 'account'" class="tab-body">
         <LoginDialog embedded @login-success="emit('login-success')" @close="() => {}" />
+        <button v-if="loggedIn" class="danger" @click="doLogout">退出登录</button>
       </div>
 
       <!-- 设置 -->
