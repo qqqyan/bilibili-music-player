@@ -28,3 +28,7 @@ data/
 
 # 系统文件
 .DS_Store
+
+# release 打包产物
+build_tmp/
+dist_release/

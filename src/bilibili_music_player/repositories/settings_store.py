@@ -1,9 +1,10 @@
 """应用设置持久化:data/settings.json。"""
 
 import json
-from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
+from ..config import PROJECT_ROOT
+
+DATA_DIR = PROJECT_ROOT / "data"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 
 DEFAULTS: dict = {

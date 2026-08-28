@@ -7,13 +7,18 @@
 """
 
 import os
+import sys
 from pathlib import Path
 
 from bilibili_api.utils.network import Credential
 
-from .repositories import auth_store
+# PyInstaller onedir 打包:exe 所在目录(用户解压目录)即应用根,data/ 建在其旁
+if getattr(sys, "frozen", False):
+    PROJECT_ROOT = Path(sys.executable).resolve().parent
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+from .repositories import auth_store
 
 
 def _load_dotenv(path: Path | None = None) -> None:

@@ -7,6 +7,7 @@
   quality.py / models.py  Domain 层:档位规则与数据模型
 """
 
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -66,6 +67,10 @@ async def health():
 
 
 # 前端构建产物(web/dist 存在时由后端直接托管)
-_DIST = Path(__file__).resolve().parent.parent.parent / "web" / "dist"
+# PyInstaller 打包后资源在 _MEIPASS(onedir 的 _internal)内
+if getattr(sys, "frozen", False):
+    _DIST = Path(sys._MEIPASS) / "web" / "dist"
+else:
+    _DIST = Path(__file__).resolve().parent.parent.parent / "web" / "dist"
 if _DIST.exists():
     app.mount("/", StaticFiles(directory=_DIST, html=True), name="web")

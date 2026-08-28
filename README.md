@@ -57,6 +57,30 @@ tests/          pytest 冒烟与档位规则测试(uv run pytest tests/)
 
 后端依赖上游维护版 [bilibili-api-zoku](https://github.com/bromothymolb/bilibili-api-zoku),通过 GitHub archive tarball 固定 commit 安装(绕开 git 协议,国内网络友好;升级时更新 `pyproject.toml` 中的 commit hash)。
 
+## 开箱即用(Release 包,无需安装 Python)
+
+GitHub Releases 页面提供各平台打包产物(推送 `v*` 标签自动构建):
+
+| 平台 | 产物 |
+| --- | --- |
+| Windows | `bilibili-music-player-x.y.z-windows.zip` |
+| macOS(Apple Silicon / Intel) | `bilibili-music-player-x.y.z-macos-arm64.tar.gz` / `-macos-x86_64.tar.gz` |
+| Linux | `bilibili-music-player-x.y.z-linux-x86_64.tar.gz` |
+
+**使用**:下载对应包 → 解压到任意可写目录(桌面/下载等)→ 双击 `bilibili-music-player(.exe)` → 自动打开浏览器。
+
+- 控制台窗口显示运行日志,**关闭窗口即退出服务**;首次打开浏览器需要几秒预热(curl_cffi 伪装指纹 + wbi 签名)
+- 歌单/缓存/设置/登录凭证保存在解压目录下的 `data/` 文件夹,整个文件夹拷贝即迁移
+- 默认端口 8000,被占用时可用环境变量 `BMP_PORT` 指定其他端口
+
+**手动构建**(需要 uv + Node):
+
+```bash
+uv sync
+uv run python pyinstaller/build_release.py   # 自动 npm run build + PyInstaller 打包 + 压缩归档
+# 产物在 dist_release/ 下
+```
+
 ## 快速开始
 
 ```bash
@@ -124,3 +148,14 @@ uv run bilibili-music-player
 - [ ] B 站歌单(AudioList)导入
 - [ ] 歌词(弹幕转歌词?)
 - [ ] 安卓端(Capacitor / uni-app 打包)
+## 免责声明
+
+- 本项目仅供**学习与研究**使用,不用于任何商业用途。
+- 所有音视频内容的版权归 bilibili 及各 UP 主所有,请支持正版,尊重创作者。
+- 请遵守 bilibili 服务条款及相关法律法规,**请勿**用于批量抓取、二次分发或任何侵犯版权的行为;使用本项目产生的一切后果由使用者自行承担,与开发者无关。
+- 请合理设置下载频率,避免对 bilibili 服务器造成负担。
+
+## 致谢
+
+- [bilibili-api-zoku](https://github.com/bromothymolb/bilibili-api-zoku) —— 上游维护版 bilibili API 库,本项目接口层核心依赖
+- [Claude Code](https://claude.com/claude-code) 与 [DeepSeek](https://www.deepseek.com/) —— 开发过程中提供 AI 辅助 🥰
