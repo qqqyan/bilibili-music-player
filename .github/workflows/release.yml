@@ -40,8 +40,6 @@ jobs:
       - uses: astral-sh/setup-uv@v5
 
       - name: 构建 release 包
-        env:
-          PYTHONUTF8: "1" # Windows 控制台默认 GBK,强制 UTF-8 避免中文输出编码错误
         run: uv sync && uv run python pyinstaller/build_release.py --skip-frontend
 
       - uses: softprops/action-gh-release@v2

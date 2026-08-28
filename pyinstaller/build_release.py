@@ -26,11 +26,6 @@ DIST = ROOT / "dist_release"
 WORK = ROOT / "build_tmp"
 VERSION = version("bilibili-music-player")
 
-# Windows 控制台默认 cp1252/GBK,打印中文会 UnicodeEncodeError,统一强制 UTF-8
-if sys.platform.startswith("win"):
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
-
 
 def run(cmd: list, cwd: Path | None = None) -> None:
     print("+", " ".join(map(str, cmd)), flush=True)
@@ -55,7 +50,7 @@ def main() -> None:
     if not args.skip_frontend:
         run(["npm", "run", "build"], cwd=ROOT / "web")
     if not (ROOT / "web" / "dist" / "index.html").exists():
-        sys.exit("web/dist 不存在,请先在 web/ 目录 npm run build")
+        sys.exit("web/dist not found. Run: cd web && npm run build")
 
     if DIST.exists():
         shutil.rmtree(DIST)
@@ -73,10 +68,10 @@ def main() -> None:
     base = DIST / f"bilibili-music-player-{VERSION}-{tag}"
     if sys.platform.startswith("win"):
         shutil.make_archive(str(base), "zip", root_dir=DIST, base_dir="bilibili-music-player")
-        print(f"\n完成: {base}.zip")
+        print(f"\ndone: {base}.zip")
     else:
         shutil.make_archive(str(base), "gztar", root_dir=DIST, base_dir="bilibili-music-player")
-        print(f"\n完成: {base}.tar.gz")
+        print(f"\ndone: {base}.tar.gz")
 
 
 if __name__ == "__main__":
