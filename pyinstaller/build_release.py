@@ -26,6 +26,11 @@ DIST = ROOT / "dist_release"
 WORK = ROOT / "build_tmp"
 VERSION = version("bilibili-music-player")
 
+# Windows 控制台默认 cp1252/GBK,打印中文会 UnicodeEncodeError,统一强制 UTF-8
+if sys.platform.startswith("win"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 
 def run(cmd: list, cwd: Path | None = None) -> None:
     print("+", " ".join(map(str, cmd)), flush=True)
