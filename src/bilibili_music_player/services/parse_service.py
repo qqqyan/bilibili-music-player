@@ -84,18 +84,88 @@ def _stream_urls(*streams) -> list[str]:
 # ---------------------------------------------------------------- 解析
 
 async def resolve_track(track_id: str, page_index: int = 0) -> ResolvedTrack:
-    """解析 bilibili 视频播放流(bvBVxxx)。
+    """解析播放流:bvBVxxx(bilibili 视频) / ne{song_id}(网易云歌曲)。
 
     经信号量限频:并发解析不超过 2 个,超出排队(防批量操作触发风控)。
     非 ValueError 的异常(API 错误/下架等)归一为 ValueError,路由层统一 502。
     """
     async with _RESOLVE_SEMAPHORE:
+        if track_id.startswith("ne"):
+            return await _resolve_netease(int(track_id[2:]))
         try:
             return await _resolve_video(track_id.removeprefix("bv"), page_index)
         except ValueError:
             raise
         except Exception as e:  # ApiException / ResponseCodeException 等
             raise ValueError(f"解析失败: {str(e)[:120]}") from e
+
+
+async def _resolve_netease(song_id: int) -> ResolvedTrack:
+    """网易云歌曲:元数据 + 播放地址(登录态从无损档起逐档降级)。
+
+    无画面(video_streams 空);音频 URL 经流代理(带网易云 Referer)。
+    """
+    import asyncio as _asyncio
+
+    from ..config import get_netease_cookie
+    from . import netease as ne
+    from .stream_proxy import BROWSER_UA
+
+    cookie = get_netease_cookie()
+
+    # 元数据(失败用占位,不阻断播放)
+    title, artist, cover, duration = f"网易云歌曲 {song_id}", "未知歌手", "", 0
+    try:
+        det = await _asyncio.to_thread(ne.song_detail, [song_id], cookie)
+        if det:
+            d = det[0]
+            title = d.get("name") or title
+            artists = [a["name"] for a in (d.get("artists") or d.get("ar") or []) if a.get("name")]
+            artist = "、".join(artists) or artist
+            al = d.get("album") or d.get("al") or {}
+            cover = abs_url(al.get("picUrl") or "")
+            duration = round((d.get("dt") or d.get("duration") or 0) / 1000)
+    except Exception:
+        pass
+
+    # 播放地址:登录态可从无损起,匿名从极高起;逐档降级
+    start = 0 if cookie else 1
+    url = kind = ""
+    quality_label = quality_id = 0
+    for label, qid, br in ne.NETEASE_LEVELS[start:]:
+        try:
+            url, kind = await _asyncio.to_thread(ne.song_url, song_id, br, cookie)
+        except Exception:
+            continue
+        if url:
+            quality_label, quality_id = label, qid
+            break
+    if not url:
+        raise ValueError("未获取到播放地址(可能需登录或该歌曲无版权)")
+
+    mime = ne.NETEASE_MIME.get(kind, "audio/mpeg")
+    token = register_stream(
+        [url],
+        headers={"User-Agent": BROWSER_UA, "Referer": "https://music.163.com/"},
+        mime=mime,  # 网易云 CDN 的 content-type 可能错标(flac 也标 audio/mpeg)
+    )
+    stream = StreamInfo(
+        quality_id=quality_id,
+        quality=quality_label,
+        mime=mime,
+        bandwidth=quality_id,
+        stream_url=stream_token_url(token),
+    )
+    return ResolvedTrack(
+        id=f"ne{song_id}",
+        title=title,
+        artist=artist,
+        cover=cover,
+        duration=duration,
+        source="网易云音乐",
+        audio_streams=[stream],
+        video_streams=[],
+    )
 
 async def _resolve_video(bvid: str, page_index: int) -> ResolvedTrack:
     """视频:解析 DASH 音视频流,提供多音质档 + MV 画面。"""
@@ -141,6 +211,13 @@ async def _resolve_video(bvid: str, page_index: int) -> ResolvedTrack:
     all_streams = detecter.detect()
     audio_streams = [s for s in all_streams if isinstance(s, AudioStreamDownloadURL)]
     video_streams = [s for s in all_streams if isinstance(s, VideoStreamDownloadURL)]
+    # 过滤浏览器不支持的音频编码(B 站灰度推过 av3a=AVS3 音频,Chrome 无法解码,
+    # 播出来是 "no supported source";无 codecs 字段的老流保留,不误杀)
+    audio_streams = [
+        s
+        for s in audio_streams
+        if not getattr(s, "codecs", "") or str(s.codecs).startswith("mp4a")
+    ]
     if not audio_streams:
         raise ValueError("未获取到音频流(可能需登录或该视频不支持)")
 

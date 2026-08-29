@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { usePlayerStore } from "../stores/player";
 import LoginDialog from "./LoginDialog.vue";
+import NeteaseLogin from "./NeteaseLogin.vue";
 
 const props = defineProps({
   initialTab: { type: String, default: "settings" }, // account / settings
@@ -119,6 +120,8 @@ async function saveAliases() {
       <div v-if="tab === 'account'" class="tab-body">
         <LoginDialog embedded @login-success="emit('login-success')" @close="() => {}" />
         <button v-if="loggedIn" class="danger" @click="doLogout">退出登录</button>
+        <div class="section-title">网易云音乐账号</div>
+        <NeteaseLogin />
       </div>
 
       <!-- 歌手映射 -->
@@ -280,6 +283,13 @@ async function saveAliases() {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
 }
 .row {
   display: flex;

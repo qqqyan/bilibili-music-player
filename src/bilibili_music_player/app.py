@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import configure_client, is_logged_in
 from .services.download_manager import manager as download_manager
 from .services.match_service import manager as match_manager
-from .routers import auth, cache, match, playlist, search, settings, track, user
+from .routers import auth, cache, match, netease, playlist, search, settings, track, user
 
 
 @asynccontextmanager
@@ -58,6 +58,7 @@ app.add_middleware(
 app.include_router(search.router)
 app.include_router(track.router)
 app.include_router(match.router)
+app.include_router(netease.router)
 app.include_router(user.router)
 app.include_router(cache.router)
 app.include_router(playlist.router)

@@ -16,7 +16,7 @@ from ..repositories import cache_store
 from .parse_service import resolve_track
 from .. import quality
 from ..quality import pick_stream_by_quality
-from .stream_proxy import BROWSER_UA, REFERER, get_stream_urls
+from .stream_proxy import BROWSER_UA, REFERER, get_stream_headers, get_stream_urls
 
 # 下载任务之间的固定间隔(秒),避免连续请求触发风控
 TASK_INTERVAL = 1.5
@@ -286,7 +286,13 @@ class DownloadManager:
 
         需要下载返回任务 dict,否则 None。
         """
-        resolved = await resolve_track(track_id)
+        try:
+            resolved = await resolve_track(track_id)
+        except ValueError:
+            # 网易云曲目未登录/无版权时解析失败:已有缓存视为完成,无需下载
+            if track_id.startswith("ne") and await cache_store.get_track_meta(track_id):
+                return None
+            raise
         meta = {
             "title": resolved.title,
             "artist": resolved.artist,
@@ -410,7 +416,8 @@ class DownloadManager:
             raise ValueError("无法获取流地址")
         tmp = cache_store.tmp_path(track_id, stream.quality_id, kind)
         tmp.parent.mkdir(parents=True, exist_ok=True)
-        headers = {"User-Agent": BROWSER_UA, "Referer": REFERER}
+        # 请求头按来源携带(注册流时定好的 UA/Referer;网易云 CDN 与 B 站要求不同)
+        headers = get_stream_headers(token) or {"User-Agent": BROWSER_UA, "Referer": REFERER}
 
         last_err: Exception | None = None
         async with httpx.AsyncClient(
@@ -428,11 +435,12 @@ class DownloadManager:
                                 continue
                             async for chunk in resp.aiter_bytes():
                                 f.write(chunk)
-                    # 下载成功:去掉 .part 后缀落位,再更新 meta
+                    # 下载成功:去掉 .part 后缀落位,再更新 meta(记录真实 mime)
                     final = tmp.with_name(tmp.name.removesuffix(".part"))
                     os.replace(tmp, final)
                     await cache_store.save_downloaded(
-                        track_id, stream.quality_id, meta, kind
+                        track_id, stream.quality_id, meta, kind,
+                        mime=getattr(stream, "mime", ""),
                     )
                     return
                 except asyncio.CancelledError:

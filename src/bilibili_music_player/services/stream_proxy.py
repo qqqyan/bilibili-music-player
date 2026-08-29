@@ -28,16 +28,30 @@ class StreamEntry:
             "Referer": REFERER,  # B 站 CDN 必须带 Referer,否则 403
         }
     )
+    mime: str | None = None  # 非空时覆盖上游 content-type(如网易云 CDN 统一标 audio/mpeg)
 
 
 # token -> StreamEntry(进程内存即可,重启失效不影响使用)
 _STREAMS: dict[str, StreamEntry] = {}
 
 
-def register_stream(urls: list[str]) -> str:
-    """注册一组候选流 URL,返回代理 token。"""
+def register_stream(
+    urls: list[str],
+    headers: dict[str, str] | None = None,
+    mime: str | None = None,
+) -> str:
+    """注册一组候选流 URL,返回代理 token。
+
+    headers 缺省为 bilibili UA/Referer;其他来源(如网易云)可自定。
+    mime 非空时转发生效时覆盖上游 content-type。
+    """
     token = uuid.uuid4().hex
-    _STREAMS[token] = StreamEntry(urls=urls)
+    # headers 缺省走 StreamEntry 默认(bilibili UA/Referer);显式传入才覆盖
+    _STREAMS[token] = (
+        StreamEntry(urls=urls)
+        if not headers and not mime
+        else StreamEntry(urls=urls, headers=headers or {}, mime=mime)
+    )
     return token
 
 
@@ -49,6 +63,12 @@ def get_stream_urls(token: str) -> list[str]:
     """按 token 取回真实 CDN URL 列表(供下载器等内部组件使用)。"""
     entry = _STREAMS.get(token)
     return list(entry.urls) if entry else []
+
+
+def get_stream_headers(token: str) -> dict[str, str]:
+    """按 token 取回请求头(下载器按来源携带正确 Referer/UA)。"""
+    entry = _STREAMS.get(token)
+    return dict(entry.headers) if entry else {}
 
 
 async def prepare_stream(token: str, range_header: str | None):
@@ -82,9 +102,8 @@ async def prepare_stream(token: str, range_header: str | None):
             continue
 
         resp_headers = {
-            "Content-Type": resp.headers.get(
-                "content-type", "application/octet-stream"
-            ),
+            "Content-Type": entry.mime
+            or resp.headers.get("content-type", "application/octet-stream"),
             "Accept-Ranges": "bytes",
             "Cache-Control": "no-store",
         }

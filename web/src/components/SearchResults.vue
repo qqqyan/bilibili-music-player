@@ -89,6 +89,10 @@ function onArtistLeave() {
             </span>
             <span class="dot">·</span>
             <span>{{ track.source }}</span>
+            <template v-if="track.album">
+              <span class="dot">·</span>
+              <span class="album ellipsis">{{ track.album }}</span>
+            </template>
           </div>
         </div>
         <!-- 悬停预览浮层(item 级定位,避免被 .sub 的 overflow:hidden 裁剪) -->
@@ -246,6 +250,9 @@ function onArtistLeave() {
 }
 .dot {
   opacity: 0.5;
+}
+.album {
+  max-width: 200px;
 }
 /* 悬停预览浮层 */
 .hover-card {

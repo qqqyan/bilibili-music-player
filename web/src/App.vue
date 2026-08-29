@@ -1,7 +1,14 @@
 <script setup>
 import { onMounted, ref, watch } from "vue";
 import { usePlayerStore } from "./stores/player";
-import { authLogout, authStatus, getUserProfile, searchTracks, searchUsers } from "./api";
+import {
+  authLogout,
+  authStatus,
+  getUserProfile,
+  searchNetease,
+  searchTracks,
+  searchUsers,
+} from "./api";
 import SearchBar from "./components/SearchBar.vue";
 import SearchResults from "./components/SearchResults.vue";
 import Playlist from "./components/Playlist.vue";
@@ -34,6 +41,7 @@ const searching = ref(false);
 const searchError = ref("");
 const keyword = ref("");
 const page = ref(1);
+const searchSource = ref("bilibili"); // bilibili / netease
 // UP 主:搜索结果区 + 主页视图
 const users = ref([]);
 const userView = ref(null); // { user, videos, hasMore, page, loading, error }
@@ -90,18 +98,37 @@ async function doSearch(kw) {
   userView.value = null; // 新搜索退出 UP 主页
   leftEl.value?.scrollTo({ top: 0 }); // 新搜索回到列表顶部
   try {
-    const [data, upList] = await Promise.all([
-      searchTracks(kw, 1),
-      searchUsers(kw, 1).catch(() => []),
-    ]);
-    results.value = data.items;
-    hasMore.value = data.has_more;
-    users.value = upList;
+    if (searchSource.value === "netease") {
+      const data = await searchNetease(kw, 1);
+      results.value = data.items;
+      hasMore.value = data.has_more;
+      users.value = [];
+    } else {
+      const [data, upList] = await Promise.all([
+        searchTracks(kw, 1),
+        searchUsers(kw, 1).catch(() => []),
+      ]);
+      results.value = data.items;
+      hasMore.value = data.has_more;
+      users.value = upList;
+    }
   } catch (e) {
     results.value = [];
     searchError.value = e.message;
   } finally {
     searching.value = false;
+  }
+}
+
+/** 切换搜索源:有结果时用当前关键词重搜,否则回到空态 */
+function onSourceChange(src) {
+  searchSource.value = src;
+  if (keyword.value) {
+    doSearch(keyword.value);
+  } else {
+    results.value = [];
+    users.value = [];
+    userView.value = null;
   }
 }
 
@@ -147,7 +174,10 @@ async function loadMore() {
   if (!hasMore.value || searching.value) return;
   searching.value = true;
   try {
-    const data = await searchTracks(keyword.value, page.value + 1);
+    const data =
+      searchSource.value === "netease"
+        ? await searchNetease(keyword.value, page.value + 1)
+        : await searchTracks(keyword.value, page.value + 1);
     results.value.push(...data.items);
     hasMore.value = data.has_more;
     page.value += 1;
@@ -199,8 +229,10 @@ function onReplaceTrack(track) {
       <SearchBar
         :loading="searching"
         :has-results="results.length > 0 || !!keyword"
+        :source="searchSource"
         @search="doSearch"
         @clear="clearSearch"
+        @source-change="onSourceChange"
       />
       <span v-if="store.offline" class="offline-badge" title="后端服务不可达,自动重试中">
         ⚠ 后端离线,重试中…

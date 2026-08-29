@@ -4,8 +4,9 @@ import { ref } from "vue";
 defineProps({
   loading: Boolean,
   hasResults: Boolean,
+  source: { type: String, default: "bilibili" }, // bilibili / netease
 });
-const emit = defineEmits(["search", "clear"]);
+const emit = defineEmits(["search", "clear", "source-change"]);
 
 const keyword = ref("");
 
@@ -34,12 +35,28 @@ function backHome() {
     >
       ← 返回主页
     </button>
+    <div class="source-switch">
+      <button
+        :class="{ on: source === 'bilibili' }"
+        title="搜索 bilibili 视频"
+        @click="emit('source-change', 'bilibili')"
+      >
+        B站
+      </button>
+      <button
+        :class="{ on: source === 'netease' }"
+        title="搜索网易云音乐"
+        @click="emit('source-change', 'netease')"
+      >
+        网易云
+      </button>
+    </div>
     <div class="input-wrap">
       <input
         v-model="keyword"
         class="search-input"
         type="text"
-        placeholder="搜索 bilibili 视频,直接当音乐听…"
+        :placeholder="source === 'netease' ? '搜索网易云歌曲…' : '搜索 bilibili 视频,直接当音乐听…'"
         @keyup.enter="submit"
       />
       <button
@@ -123,5 +140,23 @@ function backHome() {
 .search-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.source-switch {
+  display: flex;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 17px;
+  overflow: hidden;
+}
+.source-switch button {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.source-switch button.on {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 </style>

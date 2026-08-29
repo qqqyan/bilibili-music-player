@@ -304,3 +304,37 @@ export function matchApply(neteaseIds) {
 export function placeholderAdd(neteaseIds = null) {
   return postJson("/api/match/placeholder", { netease_ids: neteaseIds });
 }
+
+// ---------------------------------------------------------------- 网易云
+
+/** 生成网易云扫码登录二维码 */
+export function neteaseQrcode() {
+  return postJson("/api/netease/qrcode", {});
+}
+
+/** 轮询网易云扫码状态 */
+export function neteaseQrcodeStatus(sessionId) {
+  return request(`/api/netease/qrcode/status/${sessionId}`);
+}
+
+/** 网易云登录状态 */
+export function neteaseStatus() {
+  return request("/api/netease/status");
+}
+
+/** 网易云登出 */
+export function neteaseLogout() {
+  return postJson("/api/netease/logout", {});
+}
+
+/** 手动导入浏览器 cookie 登录网易云 */
+export function neteaseCookieLogin(cookie) {
+  return postJson("/api/netease/cookie", { cookie });
+}
+
+/** 搜索网易云歌曲 */
+export function searchNetease(keyword, page = 1) {
+  return request(
+    `/api/netease/search?keyword=${encodeURIComponent(keyword)}&page=${page}`
+  );
+}

@@ -17,6 +17,7 @@ class TrackInfo(BaseModel):
     cover: str  # 封面 URL
     duration: int  # 时长(秒)
     source: str  # 来源标签,如 "bilibili 视频"
+    album: str = ""  # 专辑名(网易云搜索结果展示;bilibili 曲目为空)
     orig_name: str = ""  # 原平台歌名(匹配来源/首次替换前的快照,替换歌曲搜索用)
     orig_artists: list[str] = []  # 原平台歌手
     match_netease_id: int = 0  # 匹配任务歌曲 ID(0 = 非匹配来源)

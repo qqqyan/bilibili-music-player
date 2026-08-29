@@ -18,7 +18,7 @@ if getattr(sys, "frozen", False):
 else:
     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-from .repositories import auth_store
+from .repositories import auth_store, netease_auth_store
 
 
 def _load_dotenv(path: Path | None = None) -> None:
@@ -72,6 +72,31 @@ def _build_credential() -> Credential:
 
 def is_logged_in() -> bool:
     return bool(get_credential().sessdata)
+
+
+# ---------------------------------------------------------------- 网易云
+
+_netease_cookie_cache: str | None = None
+_netease_cookie_loaded = False
+
+
+def get_netease_cookie() -> str:
+    """当前网易云登录 cookie(MUSIC_U 等,内存缓存,登录/登出后热更新)。"""
+    global _netease_cookie_cache, _netease_cookie_loaded
+    if not _netease_cookie_loaded:
+        _netease_cookie_cache = netease_auth_store.cookie_from_record(
+            netease_auth_store.load_auth() or {}
+        )
+        _netease_cookie_loaded = True
+    return _netease_cookie_cache or ""
+
+
+def refresh_netease_cookie() -> str:
+    """登录态变更后重建缓存并返回当前 cookie。"""
+    global _netease_cookie_cache, _netease_cookie_loaded
+    _netease_cookie_cache = None
+    _netease_cookie_loaded = False
+    return get_netease_cookie()
 
 
 def configure_client(impersonate: str = "chrome") -> None:

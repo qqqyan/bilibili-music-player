@@ -381,8 +381,8 @@ export const usePlayerStore = defineStore("player", {
     async playTrack(index, record = true) {
       const track = this.playlist[index];
       if (!track) return;
-      // 点击正在播放的曲目:不打断播放(加载中除外,可重试)
-      if (index === this.currentIndex && this.resolved && !this._loading) {
+      // 点击正在播放的曲目:不打断播放(加载中/出错时除外,可重试)
+      if (index === this.currentIndex && this.resolved && !this._loading && !this.error) {
         return;
       }
       // 点播优先由后端处理:plan 接口调用即提队首

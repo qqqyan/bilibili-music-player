@@ -91,12 +91,31 @@ async def api_track_plan(
         local_audio = await cache_store.get_local_qualities(real_id)
         local_video = await cache_store.get_local_videos(real_id)
     except ValueError as e:
-        # 候选视频失效(下架/删除):降级该候选,下次重选/重搜
-        if match_chosen is not None:
-            await match_manager.demote_chosen(
-                int(track_id.removeprefix("match:")), real_id.removeprefix("bv")
-            )
-        raise HTTPException(status_code=502, detail=str(e))
+        # 网易云曲目:未登录/无版权时远程解析失败,但本地已有缓存则照常播
+        if track_id.startswith("ne"):
+            meta = await cache_store.get_track_meta(real_id)
+            if meta:
+                resolved = ResolvedTrack(
+                    id=real_id,
+                    title=meta.get("title") or "网易云歌曲",
+                    artist=meta.get("artist") or "未知歌手",
+                    cover=meta.get("cover") or "",
+                    duration=meta.get("duration") or 0,
+                    source=meta.get("source") or "网易云音乐",
+                    audio_streams=[],  # 仅本地档,remote 无流
+                    video_streams=[],
+                )
+                local_audio = await cache_store.get_local_qualities(real_id)
+                local_video = await cache_store.get_local_videos(real_id)
+            else:
+                raise HTTPException(status_code=502, detail=str(e))
+        else:
+            # 候选视频失效(下架/删除):降级该候选,下次重选/重搜
+            if match_chosen is not None:
+                await match_manager.demote_chosen(
+                    int(track_id.removeprefix("match:")), real_id.removeprefix("bv")
+                )
+            raise HTTPException(status_code=502, detail=str(e))
 
     # 合并档位(本地在前带 local 标记)
     audio_streams = _merge_quality_list(local_audio, resolved.audio_streams, "audio")
@@ -196,7 +215,10 @@ async def api_play(
         ):
             path = await cache_store.open_local_file(track_id, best["quality_id"], kind)
             if path is not None:
-                media = "video/mp4" if kind == "video" else "audio/mp4"
+                # media type 优先 meta 记录的下载时 mime(旧缓存按扩展名兜底)
+                media = await cache_store.get_local_mime(
+                    track_id, best["quality_id"], kind
+                )
                 return FileResponse(path, media_type=media)
     # 远程:解析 + 选档 + 代理流
     resolved = await resolve_track(track_id)
