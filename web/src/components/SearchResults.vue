@@ -57,9 +57,6 @@ function onArtistLeave() {
 <template>
   <div class="results">
     <div v-if="error" class="hint error">{{ error }}</div>
-    <div v-else-if="!items.length && !loading" class="hint">
-      搜索你想听的视频——任何 bilibili 视频都可以当作音乐播放,带画面的还能看 MV
-    </div>
 
     <div v-if="items.length" class="list">
       <div

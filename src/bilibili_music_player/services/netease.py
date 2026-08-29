@@ -392,3 +392,49 @@ def song_detail(song_ids: list[int], cookie: str = "") -> list[dict]:
     """歌曲元数据(名称/歌手/专辑/封面/时长)。"""
     data = _get("/api/song/detail", cookie, {"ids": json.dumps(song_ids)})
     return data.get("songs") or []
+
+
+def enrich_songs(songs: list[dict], cookie: str = "") -> list[dict]:
+    """搜索条目缺专辑封面(只有歌手头像),批量调详情补 al.picUrl。"""
+    ids = [s["id"] for s in songs if s.get("id")]
+    if not ids:
+        return songs
+    try:
+        dets = song_detail(ids, cookie)
+    except Exception:
+        return songs
+    by_id = {d["id"]: d for d in dets}
+    for s in songs:
+        d = by_id.get(s.get("id"))
+        if not d:
+            continue
+        al = d.get("album") or d.get("al") or {}
+        pic = al.get("picUrl") or ""
+        if pic and not (s.get("album") or {}).get("picUrl"):
+            s.setdefault("album", {})["picUrl"] = pic
+    return songs
+
+
+def search_artists(keyword: str, cookie: str = "") -> list[dict]:
+    """搜索歌手(老接口 type=100)。"""
+    data = _get(
+        "/api/search/get/web",
+        cookie,
+        {"s": keyword, "type": 100, "limit": 12, "offset": 0},
+    )
+    result = data.get("result") or {}
+    return result.get("artists") or []
+
+
+def artist_detail(artist_id: int, cookie: str = "") -> dict:
+    """歌手信息(名称/头像/简介/作品数)。"""
+    data = _get(f"/api/artist/{artist_id}", cookie, {})
+    return data.get("artist") or {}
+
+
+def artist_songs(artist_id: int, cookie: str = "", limit: int = 30) -> list[dict]:
+    """歌手热门歌曲。"""
+    data = _get(
+        "/api/artist/top/song", cookie, {"id": artist_id, "limit": limit}
+    )
+    return data.get("songs") or []

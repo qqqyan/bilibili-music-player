@@ -151,7 +151,55 @@ async def api_search(
     """搜索网易云歌曲(匿名可用;登录后 VIP 曲目可播)。"""
     try:
         songs, total = netease.search(keyword, page, get_netease_cookie())
+        # 搜索条目缺专辑封面,批量补详情(带封面)
+        songs = netease.enrich_songs(songs, get_netease_cookie())
     except ValueError as e:
         raise HTTPException(status_code=502, detail=str(e))
     items = [_song_to_track(s) for s in songs]
     return SearchPage(items=items, has_more=(page - 1) * 20 + len(songs) < total)
+
+
+@router.get("/artists")
+async def api_artists(
+    keyword: str = Query(..., min_length=1, description="搜索关键词"),
+):
+    """搜索网易云歌手(与 bilibili UP 主卡片对齐的字段)。"""
+    try:
+        artists = netease.search_artists(keyword, get_netease_cookie())
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    items = [
+        {
+            "mid": a.get("id") or 0,
+            "name": a.get("name") or "",
+            "face": abs_url(a.get("picUrl") or a.get("img1v1Url") or ""),
+            # fansSize 部分歌手有真实粉丝数;没有时前端回退显示作品数
+            "fans": a.get("fansSize") or 0,
+            "songs": a.get("musicSize") or 0,
+        }
+        for a in artists
+    ]
+    return {"items": items}
+
+
+@router.get("/artist/{artist_id}")
+async def api_artist(artist_id: int):
+    """歌手主页:信息 + 热门歌曲(结构对齐 /api/user/{mid})。"""
+    try:
+        info = netease.artist_detail(artist_id, get_netease_cookie())
+        songs = netease.artist_songs(artist_id, get_netease_cookie())
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {
+        "user": {
+            "mid": artist_id,
+            "name": info.get("name") or "未知歌手",
+            "face": abs_url(info.get("picUrl") or info.get("img1v1Url") or ""),
+            "sign": info.get("briefDesc") or "",
+            "fans": info.get("fansSize") or 0,
+            "songs": info.get("musicSize") or 0,
+            "albums": info.get("albumSize") or 0,
+        },
+        "videos": [_song_to_track(s) for s in songs],
+        "has_more": False,
+    }

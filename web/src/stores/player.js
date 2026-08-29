@@ -56,6 +56,8 @@ export const usePlayerStore = defineStore("player", {
         auto_cache_on_play: true, // 播放时自动缓存(仅列表内曲目)
         artist_map: [], // 歌手映射表(设置弹窗「歌手映射」Tab 编辑)
         match_auto_add: false, // 导入匹配歌单后立即以占位曲目加入播放列表
+        new_track_next_on_shuffle: false, // 随机模式下新加入歌曲默认下一首播放
+        search_personalized: true, // 搜索带登录凭证(个性化排序,与官网一致)
       },
       externalTrack: null, // 临时播放(未入列表)的曲目,currentTrack 回退用
       mvEnabled: false,
@@ -268,8 +270,26 @@ export const usePlayerStore = defineStore("player", {
       this.playlist.push(track);
       this._savePlaylist();
       // 策略 A:不自动下载,播放过才会下载(见 playTrack)
-      if (this.mode === "shuffle") this._buildShuffleQueue(); // 队列索引同步
+      if (this.mode === "shuffle") {
+        this._buildShuffleQueue(); // 队列索引同步
+        // 设置开启时:随机模式下新加入的歌默认下一首播放
+        if (this.settings.new_track_next_on_shuffle) {
+          const idx = this.playlist.length - 1;
+          this.shuffleQueue = [idx, ...this.shuffleQueue.filter((i) => i !== idx)];
+        }
+      }
       return true;
+    },
+
+    /** 播放全部:随机模式随机起点(有期待感),其余模式从第一首开始 */
+    async playAll() {
+      if (!this.playlist.length) return;
+      let idx = 0;
+      if (this.mode === "shuffle") {
+        this._buildShuffleQueue();
+        idx = this.shuffleQueue.pop() ?? 0;
+      }
+      await this.playTrack(idx);
     },
 
     removeTrack(index) {
@@ -531,11 +551,13 @@ export const usePlayerStore = defineStore("player", {
     },
 
     /** 是否允许播放触发的自动缓存:开关开启且曲目在播放列表内
-     *  (临时播放不入列表,强制不缓存——孤儿缓存用户无感知入口) */
+     *  (临时播放不入列表,强制不缓存——孤儿缓存用户无感知入口)。
+     *  长视频(>10 分钟)不自动下载,只允许手动下载。 */
     _autoCacheAllowed(track) {
       return (
         this.settings.auto_cache_on_play !== false &&
-        this.playlist.some((t) => t.id === track.id)
+        this.playlist.some((t) => t.id === track.id) &&
+        !((track.duration || 0) > 600)
       );
     },
 
@@ -826,6 +848,11 @@ export const usePlayerStore = defineStore("player", {
 
     /** 清理画面元素。resetMode=true 时同时关闭 MV 模式(用户手动关闭)。 */
     _teardownMv(resetMode = true) {
+      // 全屏(video 控件全屏按钮)状态下重置元素会引发媒体僵持(下一首失效),
+      // 先退出全屏再清理
+      if (document.fullscreenElement) {
+        document.exitFullscreen?.().catch(() => {});
+      }
       if (resetMode) this.mvEnabled = false;
       this.mvReady = false;
       this._tearingDown = true;
@@ -894,6 +921,7 @@ export const usePlayerStore = defineStore("player", {
 
     // -------------------------------------------------- 内部
     _onEnded() {
+      console.debug("[player] audio ended → next");
       if (this.mode === "single-loop") return; // audio.loop 已处理
       this.next(true);
     },

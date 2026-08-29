@@ -4,8 +4,10 @@ import { usePlayerStore } from "./stores/player";
 import {
   authLogout,
   authStatus,
+  getNeteaseArtist,
   getUserProfile,
   searchNetease,
+  searchNeteaseArtists,
   searchTracks,
   searchUsers,
 } from "./api";
@@ -55,6 +57,26 @@ const showMatch = ref(false);
 // 右侧栏:播放列表 / 匹配列表
 const rightTab = ref("playlist");
 
+// 右侧栏可拖拽调宽(记忆宽度)
+const rightWidth = ref(Number(localStorage.getItem("bmp-right-width")) || 340);
+function onResizeStart(e) {
+  e.preventDefault();
+  const startX = e.clientX;
+  const startW = rightWidth.value;
+  const onMove = (ev) => {
+    rightWidth.value = Math.min(600, Math.max(260, startW + (startX - ev.clientX)));
+  };
+  const onUp = () => {
+    localStorage.setItem("bmp-right-width", String(rightWidth.value));
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    document.body.classList.remove("resizing");
+  };
+  document.body.classList.add("resizing");
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
 function openSettings(tab) {
   settingsTab.value = tab;
   showSettings.value = true;
@@ -84,10 +106,18 @@ async function doLogout() {
 onMounted(async () => {
   store.attachMedia(audioEl.value, videoEl.value);
   await store.loadPlaylist();
-  // 轮询下载队列状态(本地服务,开销可忽略;2s 让下载图标更实时)
-  setInterval(() => store.refreshCacheStatus(), 2000);
+  // 缓存状态低频兜底轮询(60s;实时性由各操作点触发:入队/下载/删除/下载全部)
+  setInterval(() => store.refreshCacheStatus(), 60000);
   await fetchAuth();
   await store.loadSettings();
+  // 空格暂停(输入框聚焦时不拦截)
+  window.addEventListener("keydown", (e) => {
+    if (e.code !== "Space") return;
+    const tag = (e.target?.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || e.target?.isContentEditable) return;
+    e.preventDefault();
+    store.toggle();
+  });
 });
 
 async function doSearch(kw) {
@@ -99,13 +129,16 @@ async function doSearch(kw) {
   leftEl.value?.scrollTo({ top: 0 }); // 新搜索回到列表顶部
   try {
     if (searchSource.value === "netease") {
-      const data = await searchNetease(kw, 1);
+      const [data, artistList] = await Promise.all([
+        searchNetease(kw, 1),
+        searchNeteaseArtists(kw).catch(() => ({ items: [] })),
+      ]);
       results.value = data.items;
       hasMore.value = data.has_more;
-      users.value = [];
+      users.value = artistList.items || []; // 歌手卡片(结构同 UP 主)
     } else {
       const [data, upList] = await Promise.all([
-        searchTracks(kw, 1),
+        searchTracks(kw, 1, store.settings.search_personalized),
         searchUsers(kw, 1).catch(() => []),
       ]);
       results.value = data.items;
@@ -132,15 +165,25 @@ function onSourceChange(src) {
   }
 }
 
-/** 进入 UP 主主页 */
+/** 切换个性排序:保存设置并用当前关键词重搜(让用户即时感知差异) */
+async function onTogglePersonalized() {
+  const next = !store.settings.search_personalized;
+  await store.saveSetting({ search_personalized: next });
+  if (keyword.value) doSearch(keyword.value);
+}
+
+/** 进入 UP 主主页(网易云源时进入歌手主页) */
 async function openUser(mid) {
   userView.value = { user: null, videos: [], hasMore: false, page: 1, loading: true, error: "" };
   leftEl.value?.scrollTo({ top: 0 }); // 从列表底部进入主页时回到顶部
   try {
-    const data = await getUserProfile(mid, 1);
+    const data =
+      searchSource.value === "netease"
+        ? await getNeteaseArtist(mid)
+        : await getUserProfile(mid, 1);
     userView.value.user = data.user;
     userView.value.videos = data.videos;
-    userView.value.hasMore = data.has_more;
+    userView.value.hasMore = data.has_more || false;
     userView.value.page = 1;
   } catch (e) {
     userView.value.error = e.message;
@@ -177,7 +220,11 @@ async function loadMore() {
     const data =
       searchSource.value === "netease"
         ? await searchNetease(keyword.value, page.value + 1)
-        : await searchTracks(keyword.value, page.value + 1);
+        : await searchTracks(
+            keyword.value,
+            page.value + 1,
+            store.settings.search_personalized
+          );
     results.value.push(...data.items);
     hasMore.value = data.has_more;
     page.value += 1;
@@ -230,9 +277,11 @@ function onReplaceTrack(track) {
         :loading="searching"
         :has-results="results.length > 0 || !!keyword"
         :source="searchSource"
+        :personalized="store.settings.search_personalized"
         @search="doSearch"
         @clear="clearSearch"
         @source-change="onSourceChange"
+        @toggle-personalized="onTogglePersonalized"
       />
       <span v-if="store.offline" class="offline-badge" title="后端服务不可达,自动重试中">
         ⚠ 后端离线,重试中…
@@ -269,7 +318,7 @@ function onReplaceTrack(track) {
       </div>
     </header>
 
-    <main class="main">
+    <main class="main" :style="{ '--right-w': rightWidth + 'px' }">
       <section ref="leftEl" class="left" @scroll="onLeftScroll">
         <!-- MV 画面区(MV 模式开启且有画面流时显示) -->
         <!-- 注意:必须用 v-show 保持 video 元素常驻 DOM,否则首次开启前
@@ -316,7 +365,12 @@ function onReplaceTrack(track) {
               <img class="u-face" :src="u.face" alt="" />
               <div class="u-meta">
                 <div class="u-name ellipsis">{{ u.name }}</div>
-                <div class="u-fans">粉丝 {{ (u.fans ?? 0).toLocaleString() }}</div>
+                <div v-if="u.fans > 0" class="u-fans">
+                  粉丝 {{ u.fans.toLocaleString() }}
+                </div>
+                <div v-else-if="u.songs > 0" class="u-fans">
+                  {{ u.songs }} 首歌曲
+                </div>
               </div>
             </div>
           </div>
@@ -353,6 +407,11 @@ function onReplaceTrack(track) {
         </button>
       </section>
 
+      <div
+        class="resize-handle"
+        title="拖拽调整播放列表宽度"
+        @mousedown="onResizeStart"
+      ></div>
       <aside class="right">
         <div class="right-tabs">
           <button
@@ -491,8 +550,7 @@ function onReplaceTrack(track) {
 
 .main {
   display: grid;
-  grid-template-columns: 1fr 340px;
-  gap: 16px;
+  grid-template-columns: 1fr 16px var(--right-w);
   padding: 16px 20px;
   overflow: hidden;
   min-height: 0;
@@ -500,7 +558,27 @@ function onReplaceTrack(track) {
 
 .left {
   overflow-y: auto;
-  padding-right: 4px;
+  padding-right: 16px;
+}
+
+.resize-handle {
+  cursor: col-resize;
+  position: relative;
+}
+.resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: 0 7px;
+  border-left: 1px solid var(--border);
+  transition: border-color 0.15s;
+}
+.resize-handle:hover::before,
+:global(body.resizing) .resize-handle::before {
+  border-left: 2px solid var(--accent);
+}
+:global(body.resizing) {
+  user-select: none;
+  cursor: col-resize;
 }
 
 .back-top {
@@ -534,7 +612,6 @@ function onReplaceTrack(track) {
 .mv-video {
   display: block;
   width: 100%;
-  max-height: 46vh;
   aspect-ratio: 16 / 9;
   object-fit: contain;
   background: #000;

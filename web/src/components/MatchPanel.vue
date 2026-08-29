@@ -60,13 +60,25 @@ async function pollOnce() {
   }
 }
 
-onMounted(async () => {
+// 自调度轮询:搜索进行中 5s(进度需实时),空闲状态 60s(低频兜底);
+// 各操作(开始/暂停/导入/选择/入列)后另有即时 pollOnce
+let first = true;
+async function schedulePoll() {
+  clearTimeout(pollTimer);
   await pollOnce();
-  if (summary.value) await refreshFull();
-  pollTimer = setInterval(pollOnce, 2000);
-});
+  if (first && summary.value) {
+    await refreshFull();
+    first = false;
+  }
+  pollTimer = setTimeout(
+    schedulePoll,
+    summary.value?.status === "searching" ? 5000 : 60000
+  );
+}
 
-onUnmounted(() => clearInterval(pollTimer));
+onMounted(schedulePoll);
+
+onUnmounted(() => clearTimeout(pollTimer));
 
 const statusText = computed(() => {
   if (!summary.value) return "";

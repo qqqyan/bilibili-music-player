@@ -219,6 +219,36 @@ async function saveAliases() {
 
         <div class="row">
           <div class="row-label">
+            <span>随机模式下新加入歌曲默认下一首播放</span>
+            <span class="desc">加入播放列表时插到随机队列队首,给新歌即时反馈</span>
+          </div>
+          <label class="switch">
+            <input
+              v-model="store.settings.new_track_next_on_shuffle"
+              type="checkbox"
+              @change="saveBoolSetting('new_track_next_on_shuffle', $event.target.checked)"
+            />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="row">
+          <div class="row-label">
+            <span>搜索使用个性排序</span>
+            <span class="desc">B 站搜索带登录凭证,结果与官网一致;关闭则匿名搜索(部分内容搜不到)</span>
+          </div>
+          <label class="switch">
+            <input
+              v-model="store.settings.search_personalized"
+              type="checkbox"
+              @change="saveBoolSetting('search_personalized', $event.target.checked)"
+            />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="row">
+          <div class="row-label">
             <span>本地缓存占用</span>
             <span class="desc">data/cache/ 目录</span>
           </div>

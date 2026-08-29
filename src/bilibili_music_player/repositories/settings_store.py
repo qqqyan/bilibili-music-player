@@ -19,6 +19,8 @@ DEFAULTS: dict = {
     "artist_map": [],
     # 导入匹配歌单后立即以占位曲目加入播放列表(播放时即时匹配)
     "match_auto_add": False,
+    # 搜索带登录凭证(个性化排序,与官网结果一致;关闭则匿名搜索)
+    "search_personalized": True,
 }
 
 

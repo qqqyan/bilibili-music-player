@@ -15,9 +15,12 @@ async function request(path) {
   return res.json();
 }
 
-/** 搜索视频(全站),返回 SearchPage */
-export function searchTracks(keyword, page = 1) {
-  return request(`/api/search?keyword=${encodeURIComponent(keyword)}&page=${page}`);
+/** 搜索视频(全站),返回 SearchPage;personalized=带登录凭证(个性排序) */
+export function searchTracks(keyword, page = 1, personalized = true) {
+  return request(
+    `/api/search?keyword=${encodeURIComponent(keyword)}&page=${page}` +
+      `&personalized=${personalized ? "true" : "false"}`
+  );
 }
 
 /** 解析 bilibili 视频播放流(id: bvBVxxx) */
@@ -337,4 +340,14 @@ export function searchNetease(keyword, page = 1) {
   return request(
     `/api/netease/search?keyword=${encodeURIComponent(keyword)}&page=${page}`
   );
+}
+
+/** 搜索网易云歌手 */
+export function searchNeteaseArtists(keyword) {
+  return request(`/api/netease/artists?keyword=${encodeURIComponent(keyword)}`);
+}
+
+/** 网易云歌手主页:信息 + 热门歌曲 */
+export function getNeteaseArtist(mid) {
+  return request(`/api/netease/artist/${mid}`);
 }
