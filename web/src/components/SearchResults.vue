@@ -8,8 +8,9 @@ const props = defineProps({
   loading: Boolean,
   hasMore: Boolean,
   error: String,
+  replaceMode: Boolean, // 替换歌曲上下文激活时显示 ⇄ 按钮
 });
-const emit = defineEmits(["play", "add", "loadMore", "open-user"]);
+const emit = defineEmits(["play", "add", "replace", "loadMore", "open-user"]);
 
 const store = usePlayerStore();
 
@@ -56,9 +57,6 @@ function onArtistLeave() {
 <template>
   <div class="results">
     <div v-if="error" class="hint error">{{ error }}</div>
-    <div v-else-if="!items.length && !loading" class="hint">
-      搜索你想听的视频——任何 bilibili 视频都可以当作音乐播放,带画面的还能看 MV
-    </div>
 
     <div v-if="items.length" class="list">
       <div
@@ -88,6 +86,10 @@ function onArtistLeave() {
             </span>
             <span class="dot">·</span>
             <span>{{ track.source }}</span>
+            <template v-if="track.album">
+              <span class="dot">·</span>
+              <span class="album ellipsis">{{ track.album }}</span>
+            </template>
           </div>
         </div>
         <!-- 悬停预览浮层(item 级定位,避免被 .sub 的 overflow:hidden 裁剪) -->
@@ -118,6 +120,14 @@ function onArtistLeave() {
           @click.stop="emit('add', track)"
         >
           +
+        </button>
+        <button
+          v-if="replaceMode"
+          class="icon-btn replace-btn"
+          title="替换歌曲"
+          @click.stop="emit('replace', track)"
+        >
+          ⇄
         </button>
       </div>
     </div>
@@ -238,6 +248,9 @@ function onArtistLeave() {
 .dot {
   opacity: 0.5;
 }
+.album {
+  max-width: 200px;
+}
 /* 悬停预览浮层 */
 .hover-card {
   position: absolute;
@@ -297,6 +310,14 @@ function onArtistLeave() {
   flex-shrink: 0;
   font-size: 20px;
   font-weight: 300;
+}
+.replace-btn {
+  flex-shrink: 0;
+  font-size: 15px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 2px 6px;
 }
 .sentinel {
   height: 2px;

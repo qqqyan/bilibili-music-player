@@ -2,24 +2,31 @@
 
 import re
 
-from bilibili_api import search
+from bilibili_api.utils.network import Api
+from bilibili_api.utils.utils import get_api
 
+from ..config import get_credential
 from ..models import SearchPage, TrackInfo
 from ._utils import abs_url, first, parse_duration, strip_em
 
 # ---------------------------------------------------------------- 搜索
 
-async def search_tracks(keyword: str, page: int = 1) -> SearchPage:
+async def search_tracks(keyword: str, page: int = 1, personalized: bool = True) -> SearchPage:
     """搜索 bilibili 视频(可作为音乐播放)。
 
-    说明:音频区搜索接口 /x/mv/list 的 keyword 参数已失效(无论中英文均返回空),
-    故搜索统一走全站视频搜索。
+    说明:
+      - 音频区搜索接口 /x/mv/list 的 keyword 参数已失效,统一走全站视频搜索
+      - personalized=True 时带登录凭证请求(个性化排序,与官网结果一致;
+        实测匿名搜索会漏掉不少内容);zoku 的 search_by_type 不传凭证,
+        故直接调 Api
     """
-    res = await search.search_by_type(
-        keyword,
-        search_type=search.SearchObjectType.VIDEO,
-        page=page,
-        page_size=20,
+    api = get_api("search")["search"]["web_search_by_type"]
+    params = {"keyword": keyword, "page": page, "page_size": 20, "search_type": "video"}
+    credential = get_credential() if personalized else None
+    res = await (
+        Api(**api, wbi=True, credential=credential)
+        .update_params(**params)
+        .result
     )
     raw_items = res.get("result") or []
     if not isinstance(raw_items, list):

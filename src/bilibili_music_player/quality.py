@@ -18,6 +18,12 @@ QUALITY_LABELS = {
 # (杜比 30250 > Hi-Res 30251),比较必须用此表。
 QUALITY_ORDER = [0, 30216, 30232, 30280, 30251, 30250]
 
+# 网易云音质档(quality_id=请求码率 br,低 -> 高)
+NETEASE_QUALITY_ORDER = [128000, 192000, 320000, 999000]
+NETEASE_QUALITY_LABELS = {
+    128000: "标准", 192000: "较高", 320000: "极高", 999000: "无损",
+}
+
 # 视频画质标签(quality_id -> 展示名)
 VIDEO_QUALITY_LABELS = {
     6: "240P", 16: "360P", 32: "480P", 64: "720P", 74: "720P60",
@@ -27,7 +33,7 @@ VIDEO_QUALITY_LABELS = {
 
 
 def quality_label(quality_id: int) -> str:
-    return QUALITY_LABELS.get(quality_id, str(quality_id))
+    return QUALITY_LABELS.get(quality_id, NETEASE_QUALITY_LABELS.get(quality_id, str(quality_id)))
 
 
 def video_quality_label(quality_id: int) -> str:
@@ -37,15 +43,16 @@ def video_quality_label(quality_id: int) -> str:
 def order_of(quality_id: int, kind: str) -> int:
     """档位在质量顺序中的位置(越大越好)。
 
-    音质按 QUALITY_ORDER;视频画质枚举值与画质正相关,直接数值。
+    音质按 bilibili QUALITY_ORDER,未知 id 再查网易云档表(跨源比较仅
+    发生在同一曲目内,单曲只有单一来源,互不干扰);视频画质直接数值。
     """
     if kind == "video":
         return quality_id
-    return (
-        QUALITY_ORDER.index(quality_id)
-        if quality_id in QUALITY_ORDER
-        else len(QUALITY_ORDER)
-    )
+    if quality_id in QUALITY_ORDER:
+        return QUALITY_ORDER.index(quality_id)
+    if quality_id in NETEASE_QUALITY_ORDER:
+        return len(QUALITY_ORDER) + NETEASE_QUALITY_ORDER.index(quality_id)
+    return len(QUALITY_ORDER) + len(NETEASE_QUALITY_ORDER)
 
 
 def pick_stream_by_quality(streams: list, desired_id: int, kind: str):

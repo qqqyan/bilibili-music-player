@@ -27,13 +27,21 @@ const store = usePlayerStore();
             {{ user.sign || "这个人很懒,什么都没写" }}
           </div>
           <div class="stats">
-            粉丝 {{ (user.fans ?? 0).toLocaleString() }}
-            <template v-if="videos.length"> · 投稿 {{ videos.length }}+</template>
+            <template v-if="user.fans > 0">
+              粉丝 {{ user.fans.toLocaleString() }}
+            </template>
+            <template v-else-if="user.songs > 0">
+              {{ user.songs }} 首歌曲
+              <template v-if="user.albums > 0"> · 专辑 {{ user.albums }}</template>
+            </template>
+            <template v-if="videos.length">
+              · {{ user.fans > 0 ? "投稿" : "热门" }} {{ videos.length }}
+            </template>
           </div>
         </div>
       </div>
 
-      <div class="videos-title">全部视频</div>
+      <div class="videos-title">{{ user.fans > 0 ? "全部视频" : "热门歌曲" }}</div>
 
       <SearchResults
         :items="videos"

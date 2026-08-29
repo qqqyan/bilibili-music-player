@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { usePlayerStore } from "../stores/player";
 import LoginDialog from "./LoginDialog.vue";
+import NeteaseLogin from "./NeteaseLogin.vue";
 
 const props = defineProps({
   initialTab: { type: String, default: "settings" }, // account / settings
@@ -57,6 +58,42 @@ function doLogout() {
   if (!confirm("确定退出登录吗?")) return;
   emit("logout");
 }
+
+// ---------------------------------------------------------------- 歌手映射
+
+// 行内用逗号分隔的字符串编辑,保存时解析为数组(组件每次打开重建,直接初始化)
+const aliasRows = ref(
+  (store.settings.artist_map || []).map((m) => ({
+    singer: m.singer || "",
+    netease: (m.netease || []).join(", "),
+    bilibili: (m.bilibili || []).join(", "),
+  }))
+);
+
+function addAliasRow() {
+  aliasRows.value.push({ singer: "", netease: "", bilibili: "" });
+}
+
+function removeAliasRow(i) {
+  aliasRows.value.splice(i, 1);
+  saveAliases();
+}
+
+function splitNames(s) {
+  return [...new Set(s.split(/[,，、\s]+/).map((x) => x.trim()).filter(Boolean))];
+}
+
+async function saveAliases() {
+  const artistMap = aliasRows.value
+    .map((r) => ({
+      singer: r.singer.trim(),
+      netease: splitNames(r.netease),
+      bilibili: splitNames(r.bilibili),
+    }))
+    .filter((m) => m.singer || m.netease.length || m.bilibili.length);
+  store.settings.artist_map = artistMap;
+  await store.saveSetting({ artist_map: artistMap });
+}
 </script>
 
 <template>
@@ -74,12 +111,48 @@ function doLogout() {
         <button :class="{ on: tab === 'settings' }" @click="tab = 'settings'">
           设置
         </button>
+        <button :class="{ on: tab === 'aliases' }" @click="tab = 'aliases'">
+          歌手映射
+        </button>
       </div>
 
       <!-- 账号 -->
       <div v-if="tab === 'account'" class="tab-body">
         <LoginDialog embedded @login-success="emit('login-success')" @close="() => {}" />
         <button v-if="loggedIn" class="danger" @click="doLogout">退出登录</button>
+        <div class="section-title">网易云音乐账号</div>
+        <NeteaseLogin />
+      </div>
+
+      <!-- 歌手映射 -->
+      <div v-else-if="tab === 'aliases'" class="tab-body">
+        <div class="desc">
+          同一歌手在各平台的多个名称,用逗号分隔(同一平台可多个)。
+          用于歌单匹配的搜索词与候选评分;修改后对新搜索与手动选择即时生效。
+        </div>
+        <div v-if="!aliasRows.length" class="desc">还没有映射,点击「添加映射」维护第一位歌手</div>
+        <div v-for="(row, i) in aliasRows" :key="i" class="alias-row">
+          <input
+            v-model="row.singer"
+            class="alias-input singer"
+            placeholder="歌手(主键)"
+            @change="saveAliases"
+          />
+          <input
+            v-model="row.netease"
+            class="alias-input"
+            placeholder="网易云名(逗号分隔)"
+            @change="saveAliases"
+          />
+          <input
+            v-model="row.bilibili"
+            class="alias-input"
+            placeholder="B站名(逗号分隔)"
+            @change="saveAliases"
+          />
+          <button class="icon-btn alias-del" title="删除映射" @click="removeAliasRow(i)">✕</button>
+        </div>
+        <button class="add-btn" @click="addAliasRow">+ 添加映射</button>
       </div>
 
       <!-- 设置 -->
@@ -124,6 +197,51 @@ function doLogout() {
               v-model="store.settings.auto_cache_on_play"
               type="checkbox"
               @change="saveBoolSetting('auto_cache_on_play', $event.target.checked)"
+            />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="row">
+          <div class="row-label">
+            <span>导入匹配歌单后全部加入播放列表</span>
+            <span class="desc">以占位曲目入列参与随机播放,播放到该曲时即时匹配(单次搜索,不限频)</span>
+          </div>
+          <label class="switch">
+            <input
+              v-model="store.settings.match_auto_add"
+              type="checkbox"
+              @change="saveBoolSetting('match_auto_add', $event.target.checked)"
+            />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="row">
+          <div class="row-label">
+            <span>随机模式下新加入歌曲默认下一首播放</span>
+            <span class="desc">加入播放列表时插到随机队列队首,给新歌即时反馈</span>
+          </div>
+          <label class="switch">
+            <input
+              v-model="store.settings.new_track_next_on_shuffle"
+              type="checkbox"
+              @change="saveBoolSetting('new_track_next_on_shuffle', $event.target.checked)"
+            />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="row">
+          <div class="row-label">
+            <span>搜索使用个性排序</span>
+            <span class="desc">B 站搜索带登录凭证,结果与官网一致;关闭则匿名搜索(部分内容搜不到)</span>
+          </div>
+          <label class="switch">
+            <input
+              v-model="store.settings.search_personalized"
+              type="checkbox"
+              @change="saveBoolSetting('search_personalized', $event.target.checked)"
             />
             <span class="slider"></span>
           </label>
@@ -196,6 +314,13 @@ function doLogout() {
   flex-direction: column;
   gap: 14px;
 }
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
 .row {
   display: flex;
   align-items: center;
@@ -227,6 +352,50 @@ function doLogout() {
 }
 .danger:hover {
   background: rgba(229, 109, 109, 0.1);
+}
+
+/* 歌手映射 */
+.alias-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.alias-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  outline: none;
+  font-size: 12px;
+}
+.alias-input:focus {
+  border-color: var(--accent);
+}
+.alias-input.singer {
+  flex: 0.8;
+}
+.alias-del {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 4px 6px;
+}
+.alias-del:hover {
+  color: #e56d6d;
+}
+.add-btn {
+  align-self: flex-start;
+  padding: 6px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 12px;
+}
+.add-btn:hover {
+  background: var(--accent-soft);
 }
 
 /* 开关 */

@@ -14,6 +14,13 @@ DEFAULTS: dict = {
     "auto_add_on_play": True,
     # 播放时自动缓存到本地(仅列表内曲目;临时播放联动不缓存)
     "auto_cache_on_play": True,
+    # 歌手映射表:[{singer: 主键, netease: [名..], bilibili: [名..]}]
+    # 平台名即字段,可多个;影响歌单匹配的搜索词生成与候选评分
+    "artist_map": [],
+    # 导入匹配歌单后立即以占位曲目加入播放列表(播放时即时匹配)
+    "match_auto_add": False,
+    # 搜索带登录凭证(个性化排序,与官网结果一致;关闭则匿名搜索)
+    "search_personalized": True,
 }
 
 

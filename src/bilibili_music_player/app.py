@@ -17,7 +17,8 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import configure_client, is_logged_in
 from .services.download_manager import manager as download_manager
-from .routers import auth, cache, playlist, search, settings, track, user
+from .services.match_service import manager as match_manager
+from .routers import auth, cache, match, netease, playlist, search, settings, track, user
 
 
 @asynccontextmanager
@@ -35,11 +36,13 @@ async def lifespan(_: FastAPI):
     except Exception as e:
         print(f"[config] 预热失败(不影响使用,重试机制兜底): {str(e)[:120]}", flush=True)
     await download_manager.start()
+    await match_manager.start()
     # 已登录时启动检查凭证有效性,过期自动续期
     if is_logged_in():
         await auth.try_refresh_credential()
     yield
     await download_manager.stop()
+    await match_manager.stop()
 
 
 app = FastAPI(title="bilibili-music-player", version="0.1.0", lifespan=lifespan)
@@ -54,6 +57,8 @@ app.add_middleware(
 # 路由注册(按域)
 app.include_router(search.router)
 app.include_router(track.router)
+app.include_router(match.router)
+app.include_router(netease.router)
 app.include_router(user.router)
 app.include_router(cache.router)
 app.include_router(playlist.router)

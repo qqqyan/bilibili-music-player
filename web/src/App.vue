@@ -1,13 +1,24 @@
 <script setup>
-import { onMounted, ref } from "vue";
+import { onMounted, ref, watch } from "vue";
 import { usePlayerStore } from "./stores/player";
-import { authLogout, authStatus, getUserProfile, searchTracks, searchUsers } from "./api";
+import {
+  authLogout,
+  authStatus,
+  getNeteaseArtist,
+  getUserProfile,
+  searchNetease,
+  searchNeteaseArtists,
+  searchTracks,
+  searchUsers,
+} from "./api";
 import SearchBar from "./components/SearchBar.vue";
 import SearchResults from "./components/SearchResults.vue";
 import Playlist from "./components/Playlist.vue";
 import PlayerBar from "./components/PlayerBar.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
 import UserProfile from "./components/UserProfile.vue";
+import MatchDialog from "./components/MatchDialog.vue";
+import MatchPanel from "./components/MatchPanel.vue";
 
 const store = usePlayerStore();
 const audioEl = ref(null);
@@ -32,6 +43,7 @@ const searching = ref(false);
 const searchError = ref("");
 const keyword = ref("");
 const page = ref(1);
+const searchSource = ref("bilibili"); // bilibili / netease
 // UP 主:搜索结果区 + 主页视图
 const users = ref([]);
 const userView = ref(null); // { user, videos, hasMore, page, loading, error }
@@ -40,6 +52,30 @@ const userView = ref(null); // { user, videos, hasMore, page, loading, error }
 const auth = ref({ logged_in: false, user: null });
 const showSettings = ref(false);
 const settingsTab = ref("settings");
+// 歌单匹配弹窗
+const showMatch = ref(false);
+// 右侧栏:播放列表 / 匹配列表
+const rightTab = ref("playlist");
+
+// 右侧栏可拖拽调宽(记忆宽度)
+const rightWidth = ref(Number(localStorage.getItem("bmp-right-width")) || 340);
+function onResizeStart(e) {
+  e.preventDefault();
+  const startX = e.clientX;
+  const startW = rightWidth.value;
+  const onMove = (ev) => {
+    rightWidth.value = Math.min(600, Math.max(260, startW + (startX - ev.clientX)));
+  };
+  const onUp = () => {
+    localStorage.setItem("bmp-right-width", String(rightWidth.value));
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    document.body.classList.remove("resizing");
+  };
+  document.body.classList.add("resizing");
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
 
 function openSettings(tab) {
   settingsTab.value = tab;
@@ -70,10 +106,18 @@ async function doLogout() {
 onMounted(async () => {
   store.attachMedia(audioEl.value, videoEl.value);
   await store.loadPlaylist();
-  // 轮询下载队列状态(本地服务,开销可忽略;2s 让下载图标更实时)
-  setInterval(() => store.refreshCacheStatus(), 2000);
+  // 缓存状态低频兜底轮询(60s;实时性由各操作点触发:入队/下载/删除/下载全部)
+  setInterval(() => store.refreshCacheStatus(), 60000);
   await fetchAuth();
   await store.loadSettings();
+  // 空格暂停(输入框聚焦时不拦截)
+  window.addEventListener("keydown", (e) => {
+    if (e.code !== "Space") return;
+    const tag = (e.target?.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || e.target?.isContentEditable) return;
+    e.preventDefault();
+    store.toggle();
+  });
 });
 
 async function doSearch(kw) {
@@ -84,13 +128,23 @@ async function doSearch(kw) {
   userView.value = null; // 新搜索退出 UP 主页
   leftEl.value?.scrollTo({ top: 0 }); // 新搜索回到列表顶部
   try {
-    const [data, upList] = await Promise.all([
-      searchTracks(kw, 1),
-      searchUsers(kw, 1).catch(() => []),
-    ]);
-    results.value = data.items;
-    hasMore.value = data.has_more;
-    users.value = upList;
+    if (searchSource.value === "netease") {
+      const [data, artistList] = await Promise.all([
+        searchNetease(kw, 1),
+        searchNeteaseArtists(kw).catch(() => ({ items: [] })),
+      ]);
+      results.value = data.items;
+      hasMore.value = data.has_more;
+      users.value = artistList.items || []; // 歌手卡片(结构同 UP 主)
+    } else {
+      const [data, upList] = await Promise.all([
+        searchTracks(kw, 1, store.settings.search_personalized),
+        searchUsers(kw, 1).catch(() => []),
+      ]);
+      results.value = data.items;
+      hasMore.value = data.has_more;
+      users.value = upList;
+    }
   } catch (e) {
     results.value = [];
     searchError.value = e.message;
@@ -99,15 +153,37 @@ async function doSearch(kw) {
   }
 }
 
-/** 进入 UP 主主页 */
+/** 切换搜索源:有结果时用当前关键词重搜,否则回到空态 */
+function onSourceChange(src) {
+  searchSource.value = src;
+  if (keyword.value) {
+    doSearch(keyword.value);
+  } else {
+    results.value = [];
+    users.value = [];
+    userView.value = null;
+  }
+}
+
+/** 切换个性排序:保存设置并用当前关键词重搜(让用户即时感知差异) */
+async function onTogglePersonalized() {
+  const next = !store.settings.search_personalized;
+  await store.saveSetting({ search_personalized: next });
+  if (keyword.value) doSearch(keyword.value);
+}
+
+/** 进入 UP 主主页(网易云源时进入歌手主页) */
 async function openUser(mid) {
   userView.value = { user: null, videos: [], hasMore: false, page: 1, loading: true, error: "" };
   leftEl.value?.scrollTo({ top: 0 }); // 从列表底部进入主页时回到顶部
   try {
-    const data = await getUserProfile(mid, 1);
+    const data =
+      searchSource.value === "netease"
+        ? await getNeteaseArtist(mid)
+        : await getUserProfile(mid, 1);
     userView.value.user = data.user;
     userView.value.videos = data.videos;
-    userView.value.hasMore = data.has_more;
+    userView.value.hasMore = data.has_more || false;
     userView.value.page = 1;
   } catch (e) {
     userView.value.error = e.message;
@@ -141,7 +217,14 @@ async function loadMore() {
   if (!hasMore.value || searching.value) return;
   searching.value = true;
   try {
-    const data = await searchTracks(keyword.value, page.value + 1);
+    const data =
+      searchSource.value === "netease"
+        ? await searchNetease(keyword.value, page.value + 1)
+        : await searchTracks(
+            keyword.value,
+            page.value + 1,
+            store.settings.search_personalized
+          );
     results.value.push(...data.items);
     hasMore.value = data.has_more;
     page.value += 1;
@@ -161,6 +244,25 @@ function clearSearch() {
   page.value = 1;
   users.value = [];
   userView.value = null;
+  store.cancelReplace();
+}
+
+// ---------------------------------------------------------------- 替换歌曲
+// 进入替换上下文 → 以原歌名(无则标题)搜索;结果行 ⇄ 替换后就地更新条目。
+const replaceNotice = ref("");
+
+watch(
+  () => store.replacingEntry,
+  async (entry) => {
+    if (!entry) return;
+    await doSearch(entry.orig_name || entry.title);
+  }
+);
+
+function onReplaceTrack(track) {
+  const ok = store.replaceTrack(track);
+  replaceNotice.value = ok ? `已替换为:${track.title}` : "替换失败:目标已不在列表";
+  setTimeout(() => (replaceNotice.value = ""), 4000);
 }
 </script>
 
@@ -174,8 +276,12 @@ function clearSearch() {
       <SearchBar
         :loading="searching"
         :has-results="results.length > 0 || !!keyword"
+        :source="searchSource"
+        :personalized="store.settings.search_personalized"
         @search="doSearch"
         @clear="clearSearch"
+        @source-change="onSourceChange"
+        @toggle-personalized="onTogglePersonalized"
       />
       <span v-if="store.offline" class="offline-badge" title="后端服务不可达,自动重试中">
         ⚠ 后端离线,重试中…
@@ -202,10 +308,17 @@ function clearSearch() {
         >
           ⚙
         </button>
+        <button
+          class="icon-btn"
+          title="网易云歌单匹配"
+          @click="showMatch = true"
+        >
+          🎯
+        </button>
       </div>
     </header>
 
-    <main class="main">
+    <main class="main" :style="{ '--right-w': rightWidth + 'px' }">
       <section ref="leftEl" class="left" @scroll="onLeftScroll">
         <!-- MV 画面区(MV 模式开启且有画面流时显示) -->
         <!-- 注意:必须用 v-show 保持 video 元素常驻 DOM,否则首次开启前
@@ -215,8 +328,11 @@ function clearSearch() {
             v-show="store.mvEnabled && store.currentVideoStream"
             class="mv-box"
           >
-            <video ref="videoEl" class="mv-video" controls playsinline></video>
-            <div v-if="store.mvEnabled && !store.mvReady" class="mv-loading">
+            <video ref="videoEl" class="mv-video" controls playsinline preload="auto"></video>
+            <div
+              v-if="store.mvEnabled && !store.mvReady && !store._mvLoadingSuppressed"
+              class="mv-loading"
+            >
               MV 缓冲中…
             </div>
           </div>
@@ -249,20 +365,35 @@ function clearSearch() {
               <img class="u-face" :src="u.face" alt="" />
               <div class="u-meta">
                 <div class="u-name ellipsis">{{ u.name }}</div>
-                <div class="u-fans">粉丝 {{ (u.fans ?? 0).toLocaleString() }}</div>
+                <div v-if="u.fans > 0" class="u-fans">
+                  粉丝 {{ u.fans.toLocaleString() }}
+                </div>
+                <div v-else-if="u.songs > 0" class="u-fans">
+                  {{ u.songs }} 首歌曲
+                </div>
               </div>
             </div>
+          </div>
+          <!-- 替换歌曲上下文横幅 -->
+          <div v-if="store.replacingEntry" class="replace-banner">
+            <span>
+              替换歌曲:点击结果行的 ⇄ 替换「{{ store.replacingEntry.orig_name || store.replacingEntry.title }}」
+            </span>
+            <button class="replace-cancel" @click="store.cancelReplace()">取消</button>
           </div>
           <SearchResults
             :items="results"
             :loading="searching"
             :has-more="hasMore"
             :error="searchError"
+            :replace-mode="!!store.replacingEntry"
             @play="store.playFromSearch"
             @add="(t) => store.addTrack(t)"
+            @replace="onReplaceTrack"
             @load-more="loadMore"
             @open-user="openUser"
           />
+          <div v-if="replaceNotice" class="replace-notice">{{ replaceNotice }}</div>
         </template>
 
         <!-- 「回到顶部」悬浮按钮:滚动一段距离后才显示 -->
@@ -276,8 +407,32 @@ function clearSearch() {
         </button>
       </section>
 
+      <div
+        class="resize-handle"
+        title="拖拽调整播放列表宽度"
+        @mousedown="onResizeStart"
+      ></div>
       <aside class="right">
-        <Playlist />
+        <div class="right-tabs">
+          <button
+            :class="{ on: rightTab === 'playlist' }"
+            @click="rightTab = 'playlist'"
+          >
+            播放列表
+          </button>
+          <button
+            :class="{ on: rightTab === 'match' }"
+            @click="rightTab = 'match'"
+          >
+            匹配列表
+          </button>
+        </div>
+        <Playlist v-show="rightTab === 'playlist'" />
+        <MatchPanel
+          v-show="rightTab === 'match'"
+          @applied="store.loadPlaylist()"
+          @import="showMatch = true"
+        />
       </aside>
     </main>
 
@@ -295,6 +450,12 @@ function clearSearch() {
       @close="showSettings = false"
       @login-success="onLoginSuccess"
       @logout="doLogout"
+    />
+
+    <MatchDialog
+      v-if="showMatch"
+      @close="showMatch = false"
+      @applied="store.loadPlaylist()"
     />
   </div>
 </template>
@@ -389,8 +550,7 @@ function clearSearch() {
 
 .main {
   display: grid;
-  grid-template-columns: 1fr 340px;
-  gap: 16px;
+  grid-template-columns: 1fr 16px var(--right-w);
   padding: 16px 20px;
   overflow: hidden;
   min-height: 0;
@@ -398,7 +558,27 @@ function clearSearch() {
 
 .left {
   overflow-y: auto;
-  padding-right: 4px;
+  padding-right: 16px;
+}
+
+.resize-handle {
+  cursor: col-resize;
+  position: relative;
+}
+.resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: 0 7px;
+  border-left: 1px solid var(--border);
+  transition: border-color 0.15s;
+}
+.resize-handle:hover::before,
+:global(body.resizing) .resize-handle::before {
+  border-left: 2px solid var(--accent);
+}
+:global(body.resizing) {
+  user-select: none;
+  cursor: col-resize;
 }
 
 .back-top {
@@ -432,7 +612,6 @@ function clearSearch() {
 .mv-video {
   display: block;
   width: 100%;
-  max-height: 46vh;
   aspect-ratio: 16 / 9;
   object-fit: contain;
   background: #000;
@@ -446,11 +625,29 @@ function clearSearch() {
 }
 
 .right {
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
   min-height: 0;
+  overflow: hidden;
+}
+.right-tabs {
+  display: flex;
+  flex-shrink: 0;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+.right-tabs button {
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--text-dim);
+  border-bottom: 2px solid transparent;
+}
+.right-tabs button.on {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
 }
 
 .bottombar {
@@ -517,6 +714,33 @@ function clearSearch() {
 }
 .view-hint.error {
   color: #e56d6d;
+}
+
+/* 替换歌曲横幅/提示 */
+.replace-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+}
+.replace-cancel {
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+.replace-notice {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #6fd08c;
 }
 .text-btn {
   margin-top: 10px;

@@ -48,9 +48,17 @@ def _write_meta(track_id: str, meta: dict) -> None:
     )
 
 
+def _audio_ext(track_id: str, quality_id: int) -> str:
+    """音频文件扩展名:网易云(ne)按档位用 .flac/.mp3,其余 .m4a。"""
+    if track_id.startswith("ne"):
+        return ".flac" if quality_id >= 999000 else ".mp3"
+    return ".m4a"
+
+
 def _file_path(track_id: str, quality_id: int, kind: str = "audio") -> Path:
-    prefix, ext = ("v", ".mp4") if kind == "video" else ("q", ".m4a")
-    return _track_dir(track_id) / f"{prefix}{quality_id}{ext}"
+    if kind == "video":
+        return _track_dir(track_id) / f"v{quality_id}.mp4"
+    return _track_dir(track_id) / f"q{quality_id}{_audio_ext(track_id, quality_id)}"
 
 
 def _scan_local_media(track_id: str, kind: str) -> list[dict]:
@@ -58,13 +66,14 @@ def _scan_local_media(track_id: str, kind: str) -> list[dict]:
     dir_path = _track_dir(track_id)
     if not dir_path.exists():
         return []
-    prefix, ext = ("v", ".mp4") if kind == "video" else ("q", ".m4a")
+    prefix = "v" if kind == "video" else "q"
+    # 音频扩展名随来源变化(ne 曲 .mp3/.flac),扫描时遍历全部候选
+    exts = [".mp4"] if kind == "video" else [".m4a", ".mp3", ".flac"]
     result = []
-    for f in sorted(dir_path.glob(f"{prefix}*{ext}")):
-        try:
-            quality_id = int(f.stem.removeprefix(prefix))
-        except ValueError:
+    for f in sorted(dir_path.glob(f"{prefix}*")):
+        if f.suffix not in exts or not f.stem.removeprefix(prefix).isdigit():
             continue
+        quality_id = int(f.stem.removeprefix(prefix))
         label = (
             video_quality_label(quality_id)
             if kind == "video"
@@ -79,11 +88,9 @@ def _scan_local_media(track_id: str, kind: str) -> list[dict]:
         )
     if kind == "audio":
         # 按音质从低到高排序(数值大小与音质高低不完全一致,需按顺序表)
-        result.sort(
-            key=lambda q: QUALITY_ORDER.index(q["quality_id"])
-            if q["quality_id"] in QUALITY_ORDER
-            else len(QUALITY_ORDER)
-        )
+        from ..quality import order_of
+
+        result.sort(key=lambda q: order_of(q["quality_id"], "audio"))
     else:
         # 视频画质枚举值恰与画质正相关,数值排序即可
         result.sort(key=lambda q: q["quality_id"])
@@ -101,8 +108,13 @@ def _scan_local_videos(track_id: str) -> list[dict]:
 # ---------------------------------------------------------------- 同步底层操作
 
 
-def _save_file_sync(track_id: str, quality_id: int, meta: dict, kind: str = "audio") -> Path:
-    """保存媒体文件 + 更新 meta(下载完成时调用)。kind: audio / video。"""
+def _save_file_sync(
+    track_id: str, quality_id: int, meta: dict, kind: str = "audio", mime: str = ""
+) -> Path:
+    """保存媒体文件 + 更新 meta(下载完成时调用)。kind: audio / video。
+
+    mime 记录进档位条目,本地播放时按它回放(旧缓存无 mime 按扩展名兜底)。
+    """
     dir_path = _track_dir(track_id)
     dir_path.mkdir(parents=True, exist_ok=True)
     old = _read_meta(track_id) or {}
@@ -116,12 +128,20 @@ def _save_file_sync(track_id: str, quality_id: int, meta: dict, kind: str = "aud
     else:
         old.setdefault("qualities", {})
         old["qualities"][str(quality_id)] = {
-            "file": f"q{quality_id}.m4a",
+            "file": f"q{quality_id}{_audio_ext(track_id, quality_id)}",
             "downloaded_at": int(time.time()),
         }
+    if mime:
+        (old["videos"] if kind == "video" else old["qualities"])[str(quality_id)]["mime"] = mime
     old["updated_at"] = int(time.time())
     _write_meta(track_id, old)
     return _file_path(track_id, quality_id, kind)
+
+
+async def get_track_meta(track_id: str) -> dict | None:
+    """曲目元数据缓存(下载时记录;供离线/未登录场景兜底)。"""
+    async with _lock:
+        return await asyncio.to_thread(_read_meta, track_id)
 
 
 def _delete_sync(track_id: str) -> None:
@@ -198,19 +218,69 @@ async def get_local_videos(track_id: str) -> list[dict]:
 
 
 async def open_local_file(track_id: str, quality_id: int, kind: str = "audio") -> Path | None:
-    """返回本地媒体文件路径(不存在返回 None)。kind: audio / video。"""
+    """返回本地媒体文件路径(不存在返回 None)。kind: audio / video。
+
+    优先用 meta.json 记录的真实文件名(扩展名随来源与版本变化,旧缓存
+    可能是 .m4a,新规则可能是 .flac/.mp3),再按当前规则回退。
+    """
     async with _lock:
-        path = _file_path(track_id, quality_id, kind)
 
-        def _check():
-            return path if path.exists() else None
+        def _find():
+            meta = _read_meta(track_id)
+            if meta:
+                record = (
+                    (meta.get("videos") if kind == "video" else meta.get("qualities"))
+                    or {}
+                ).get(str(quality_id)) or {}
+                name = record.get("file")
+                if name:
+                    p = _track_dir(track_id) / name
+                    if p.exists():
+                        return p
+            p = _file_path(track_id, quality_id, kind)
+            return p if p.exists() else None
 
-        return await asyncio.to_thread(_check)
+        return await asyncio.to_thread(_find)
 
 
-async def save_downloaded(track_id: str, quality_id: int, meta: dict, kind: str = "audio") -> Path:
+async def save_downloaded(
+    track_id: str, quality_id: int, meta: dict, kind: str = "audio", mime: str = ""
+) -> Path:
     async with _lock:
-        return await asyncio.to_thread(_save_file_sync, track_id, quality_id, meta, kind)
+        return await asyncio.to_thread(
+            _save_file_sync, track_id, quality_id, meta, kind, mime
+        )
+
+
+def _mime_from_suffix(path: Path, kind: str) -> str:
+    if kind == "video":
+        return "video/mp4"
+    if path.suffix == ".mp3":
+        return "audio/mpeg"
+    if path.suffix == ".flac":
+        return "audio/flac"
+    return "audio/mp4"
+
+
+async def get_local_mime(track_id: str, quality_id: int, kind: str = "audio") -> str:
+    """本地文件的回放 mime:优先 meta 记录的下载时 mime,按扩展名兜底。"""
+    async with _lock:
+
+        def _find():
+            meta = _read_meta(track_id)
+            if meta:
+                record = (
+                    (meta.get("videos") if kind == "video" else meta.get("qualities"))
+                    or {}
+                ).get(str(quality_id)) or {}
+                if record.get("mime"):
+                    return record["mime"]
+                name = record.get("file")
+                if name:
+                    return _mime_from_suffix(_track_dir(track_id) / name, kind)
+            return _mime_from_suffix(_file_path(track_id, quality_id, kind), kind)
+
+        return await asyncio.to_thread(_find)
 
 
 async def delete_track(track_id: str) -> None:

@@ -32,3 +32,4 @@ data/
 # release 打包产物
 build_tmp/
 dist_release/
+temp/

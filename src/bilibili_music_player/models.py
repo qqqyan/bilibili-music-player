@@ -6,16 +6,21 @@ from pydantic import BaseModel
 class TrackInfo(BaseModel):
     """一条曲目的元数据(搜索结果条目,也是播放列表条目)。
 
-    当前所有曲目均为 bilibili 视频(id 形如 bvBVxxx),模型收敛为单一形态。
+    当前所有曲目均为 bilibili 视频(id 形如 bvBVxxx),模型收敛为单一形态;
+    匹配来源的曲目额外携带 orig_* 字段(替换歌曲用),占位曲目 id 形如 match:123。
     """
 
-    id: str  # bvBVxxx
+    id: str  # bvBVxxx / match:123(占位)
     title: str
     artist: str  # UP 主
     mid: int = 0  # UP 主 ID(0 = 未知;悬停预览/进入主页用)
     cover: str  # 封面 URL
     duration: int  # 时长(秒)
     source: str  # 来源标签,如 "bilibili 视频"
+    album: str = ""  # 专辑名(网易云搜索结果展示;bilibili 曲目为空)
+    orig_name: str = ""  # 原平台歌名(匹配来源/首次替换前的快照,替换歌曲搜索用)
+    orig_artists: list[str] = []  # 原平台歌手
+    match_netease_id: int = 0  # 匹配任务歌曲 ID(0 = 非匹配来源)
 
 
 class StreamInfo(BaseModel):

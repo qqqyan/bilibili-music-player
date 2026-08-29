@@ -25,10 +25,13 @@ def _read() -> list[dict]:
 
 
 def _write(items: list[dict]) -> None:
+    # 原子写(.tmp + replace):进程被强杀在写入中途也不会损坏歌单
+    import os
+
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    PLAYLIST_FILE.write_text(
-        json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    tmp = PLAYLIST_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, PLAYLIST_FILE)
 
 
 async def get_playlist() -> list[dict]:

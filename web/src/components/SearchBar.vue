@@ -4,8 +4,10 @@ import { ref } from "vue";
 defineProps({
   loading: Boolean,
   hasResults: Boolean,
+  source: { type: String, default: "bilibili" }, // bilibili / netease
+  personalized: { type: Boolean, default: true }, // 带登录凭证搜索(个性排序)
 });
-const emit = defineEmits(["search", "clear"]);
+const emit = defineEmits(["search", "clear", "source-change", "toggle-personalized"]);
 
 const keyword = ref("");
 
@@ -34,12 +36,28 @@ function backHome() {
     >
       ← 返回主页
     </button>
+    <div class="source-switch">
+      <button
+        :class="{ on: source === 'bilibili' }"
+        title="搜索 bilibili 视频"
+        @click="emit('source-change', 'bilibili')"
+      >
+        B站
+      </button>
+      <button
+        :class="{ on: source === 'netease' }"
+        title="搜索网易云音乐"
+        @click="emit('source-change', 'netease')"
+      >
+        网易云
+      </button>
+    </div>
     <div class="input-wrap">
       <input
         v-model="keyword"
         class="search-input"
         type="text"
-        placeholder="搜索 bilibili 视频,直接当音乐听…"
+        :placeholder="source === 'netease' ? '搜索网易云歌曲…' : '搜索 bilibili 视频,直接当音乐听…'"
         @keyup.enter="submit"
       />
       <button
@@ -53,6 +71,15 @@ function backHome() {
     </div>
     <button class="search-btn" :disabled="loading" @click="submit">
       {{ loading ? "搜索中…" : "搜索" }}
+    </button>
+    <button
+      v-if="source === 'bilibili'"
+      class="personalized-btn"
+      :class="{ on: personalized }"
+      :title="personalized ? '个性排序已开启(带登录凭证,与官网结果一致),点击关闭' : '个性排序已关闭(匿名搜索),点击开启'"
+      @click="emit('toggle-personalized')"
+    >
+      个性
     </button>
   </div>
 </template>
@@ -123,5 +150,38 @@ function backHome() {
 .search-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.source-switch {
+  display: flex;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 17px;
+  overflow: hidden;
+}
+.source-switch button {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.source-switch button.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.personalized-btn {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.personalized-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 </style>
