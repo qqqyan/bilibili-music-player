@@ -87,9 +87,15 @@ async def resolve_track(track_id: str, page_index: int = 0) -> ResolvedTrack:
     """解析 bilibili 视频播放流(bvBVxxx)。
 
     经信号量限频:并发解析不超过 2 个,超出排队(防批量操作触发风控)。
+    非 ValueError 的异常(API 错误/下架等)归一为 ValueError,路由层统一 502。
     """
     async with _RESOLVE_SEMAPHORE:
-        return await _resolve_video(track_id.removeprefix("bv"), page_index)
+        try:
+            return await _resolve_video(track_id.removeprefix("bv"), page_index)
+        except ValueError:
+            raise
+        except Exception as e:  # ApiException / ResponseCodeException 等
+            raise ValueError(f"解析失败: {str(e)[:120]}") from e
 
 async def _resolve_video(bvid: str, page_index: int) -> ResolvedTrack:
     """视频:解析 DASH 音视频流,提供多音质档 + MV 画面。"""

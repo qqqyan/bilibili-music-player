@@ -3,11 +3,12 @@
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
-from ..repositories import cache_store
+from ..repositories import cache_store, playlist_store
 from .. import quality
 from ..quality import pick_stream_by_quality
 from ..services.parse_service import resolve_track
 from ..services.download_manager import manager as download_manager
+from ..services.match_service import manager as match_manager
 from ..models import ResolvedTrack
 from ..quality import order_of
 from ..services.stream_proxy import prepare_stream
@@ -63,11 +64,39 @@ async def api_track_plan(
 
     调用即视为「播放意图」:顺带把该曲目在下载队列中提队首(点播优先)。
     前端只按 play 决策播放、按 download 决策触发下载,无需感知本地/在线。
+    占位曲目(match:{netease_id})在此即时匹配为真实 bvid(单次搜索,无批量节流)。
     """
-    await download_manager.prioritize(track_id)
-    resolved = await resolve_track(track_id)
-    local_audio = await cache_store.get_local_qualities(track_id)
-    local_video = await cache_store.get_local_videos(track_id)
+    # 占位曲目:即时匹配 → real_id;fallback 名/歌手来自播放列表条目(任务重置也能搜)
+    match_chosen: dict | None = None
+    real_id = track_id
+    if track_id.startswith("match:"):
+        try:
+            nid = int(track_id.removeprefix("match:"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="非法占位 ID")
+        playlist = await playlist_store.get_playlist()
+        entry = next((t for t in playlist if t.get("id") == track_id), {})
+        try:
+            real_id, match_chosen = await match_manager.lazy_resolve(
+                nid,
+                fallback_name=entry.get("orig_name") or entry.get("title") or "",
+                fallback_artists=entry.get("orig_artists")
+                or ([entry["artist"]] if entry.get("artist") else []),
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+    try:
+        await download_manager.prioritize(real_id)
+        resolved = await resolve_track(real_id)
+        local_audio = await cache_store.get_local_qualities(real_id)
+        local_video = await cache_store.get_local_videos(real_id)
+    except ValueError as e:
+        # 候选视频失效(下架/删除):降级该候选,下次重选/重搜
+        if match_chosen is not None:
+            await match_manager.demote_chosen(
+                int(track_id.removeprefix("match:")), real_id.removeprefix("bv")
+            )
+        raise HTTPException(status_code=502, detail=str(e))
 
     # 合并档位(本地在前带 local 标记)
     audio_streams = _merge_quality_list(local_audio, resolved.audio_streams, "audio")
@@ -125,6 +154,8 @@ async def api_track_plan(
             "audio": decide_download(local_audio, resolved.audio_streams, audio_quality, "audio"),
             "video": decide_download(local_video, resolved.video_streams, video_quality, "video"),
         },
+        # 占位曲目即时匹配的候选(前端据此就地升级条目);非占位为 None
+        "match_chosen": match_chosen,
     }
 
 

@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from "vue";
+import { onMounted, ref, watch } from "vue";
 import { usePlayerStore } from "./stores/player";
 import { authLogout, authStatus, getUserProfile, searchTracks, searchUsers } from "./api";
 import SearchBar from "./components/SearchBar.vue";
@@ -8,6 +8,8 @@ import Playlist from "./components/Playlist.vue";
 import PlayerBar from "./components/PlayerBar.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
 import UserProfile from "./components/UserProfile.vue";
+import MatchDialog from "./components/MatchDialog.vue";
+import MatchPanel from "./components/MatchPanel.vue";
 
 const store = usePlayerStore();
 const audioEl = ref(null);
@@ -40,6 +42,10 @@ const userView = ref(null); // { user, videos, hasMore, page, loading, error }
 const auth = ref({ logged_in: false, user: null });
 const showSettings = ref(false);
 const settingsTab = ref("settings");
+// 歌单匹配弹窗
+const showMatch = ref(false);
+// 右侧栏:播放列表 / 匹配列表
+const rightTab = ref("playlist");
 
 function openSettings(tab) {
   settingsTab.value = tab;
@@ -161,6 +167,25 @@ function clearSearch() {
   page.value = 1;
   users.value = [];
   userView.value = null;
+  store.cancelReplace();
+}
+
+// ---------------------------------------------------------------- 替换歌曲
+// 进入替换上下文 → 以原歌名(无则标题)搜索;结果行 ⇄ 替换后就地更新条目。
+const replaceNotice = ref("");
+
+watch(
+  () => store.replacingEntry,
+  async (entry) => {
+    if (!entry) return;
+    await doSearch(entry.orig_name || entry.title);
+  }
+);
+
+function onReplaceTrack(track) {
+  const ok = store.replaceTrack(track);
+  replaceNotice.value = ok ? `已替换为:${track.title}` : "替换失败:目标已不在列表";
+  setTimeout(() => (replaceNotice.value = ""), 4000);
 }
 </script>
 
@@ -202,6 +227,13 @@ function clearSearch() {
         >
           ⚙
         </button>
+        <button
+          class="icon-btn"
+          title="网易云歌单匹配"
+          @click="showMatch = true"
+        >
+          🎯
+        </button>
       </div>
     </header>
 
@@ -215,8 +247,11 @@ function clearSearch() {
             v-show="store.mvEnabled && store.currentVideoStream"
             class="mv-box"
           >
-            <video ref="videoEl" class="mv-video" controls playsinline></video>
-            <div v-if="store.mvEnabled && !store.mvReady" class="mv-loading">
+            <video ref="videoEl" class="mv-video" controls playsinline preload="auto"></video>
+            <div
+              v-if="store.mvEnabled && !store.mvReady && !store._mvLoadingSuppressed"
+              class="mv-loading"
+            >
               MV 缓冲中…
             </div>
           </div>
@@ -253,16 +288,26 @@ function clearSearch() {
               </div>
             </div>
           </div>
+          <!-- 替换歌曲上下文横幅 -->
+          <div v-if="store.replacingEntry" class="replace-banner">
+            <span>
+              替换歌曲:点击结果行的 ⇄ 替换「{{ store.replacingEntry.orig_name || store.replacingEntry.title }}」
+            </span>
+            <button class="replace-cancel" @click="store.cancelReplace()">取消</button>
+          </div>
           <SearchResults
             :items="results"
             :loading="searching"
             :has-more="hasMore"
             :error="searchError"
+            :replace-mode="!!store.replacingEntry"
             @play="store.playFromSearch"
             @add="(t) => store.addTrack(t)"
+            @replace="onReplaceTrack"
             @load-more="loadMore"
             @open-user="openUser"
           />
+          <div v-if="replaceNotice" class="replace-notice">{{ replaceNotice }}</div>
         </template>
 
         <!-- 「回到顶部」悬浮按钮:滚动一段距离后才显示 -->
@@ -277,7 +322,26 @@ function clearSearch() {
       </section>
 
       <aside class="right">
-        <Playlist />
+        <div class="right-tabs">
+          <button
+            :class="{ on: rightTab === 'playlist' }"
+            @click="rightTab = 'playlist'"
+          >
+            播放列表
+          </button>
+          <button
+            :class="{ on: rightTab === 'match' }"
+            @click="rightTab = 'match'"
+          >
+            匹配列表
+          </button>
+        </div>
+        <Playlist v-show="rightTab === 'playlist'" />
+        <MatchPanel
+          v-show="rightTab === 'match'"
+          @applied="store.loadPlaylist()"
+          @import="showMatch = true"
+        />
       </aside>
     </main>
 
@@ -295,6 +359,12 @@ function clearSearch() {
       @close="showSettings = false"
       @login-success="onLoginSuccess"
       @logout="doLogout"
+    />
+
+    <MatchDialog
+      v-if="showMatch"
+      @close="showMatch = false"
+      @applied="store.loadPlaylist()"
     />
   </div>
 </template>
@@ -446,11 +516,29 @@ function clearSearch() {
 }
 
 .right {
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
   min-height: 0;
+  overflow: hidden;
+}
+.right-tabs {
+  display: flex;
+  flex-shrink: 0;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+.right-tabs button {
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--text-dim);
+  border-bottom: 2px solid transparent;
+}
+.right-tabs button.on {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
 }
 
 .bottombar {
@@ -517,6 +605,33 @@ function clearSearch() {
 }
 .view-hint.error {
   color: #e56d6d;
+}
+
+/* 替换歌曲横幅/提示 */
+.replace-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+}
+.replace-cancel {
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+.replace-notice {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #6fd08c;
 }
 .text-btn {
   margin-top: 10px;

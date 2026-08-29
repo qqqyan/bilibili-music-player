@@ -8,8 +8,9 @@ const props = defineProps({
   loading: Boolean,
   hasMore: Boolean,
   error: String,
+  replaceMode: Boolean, // 替换歌曲上下文激活时显示 ⇄ 按钮
 });
-const emit = defineEmits(["play", "add", "loadMore", "open-user"]);
+const emit = defineEmits(["play", "add", "replace", "loadMore", "open-user"]);
 
 const store = usePlayerStore();
 
@@ -118,6 +119,14 @@ function onArtistLeave() {
           @click.stop="emit('add', track)"
         >
           +
+        </button>
+        <button
+          v-if="replaceMode"
+          class="icon-btn replace-btn"
+          title="替换歌曲"
+          @click.stop="emit('replace', track)"
+        >
+          ⇄
         </button>
       </div>
     </div>
@@ -297,6 +306,14 @@ function onArtistLeave() {
   flex-shrink: 0;
   font-size: 20px;
   font-weight: 300;
+}
+.replace-btn {
+  flex-shrink: 0;
+  font-size: 15px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 2px 6px;
 }
 .sentinel {
   height: 2px;

@@ -54,6 +54,8 @@ export const usePlayerStore = defineStore("player", {
         cleanup_old_quality: false,
         auto_add_on_play: true, // 从搜索结果点播时自动加入播放列表
         auto_cache_on_play: true, // 播放时自动缓存(仅列表内曲目)
+        artist_map: [], // 歌手映射表(设置弹窗「歌手映射」Tab 编辑)
+        match_auto_add: false, // 导入匹配歌单后立即以占位曲目加入播放列表
       },
       externalTrack: null, // 临时播放(未入列表)的曲目,currentTrack 回退用
       mvEnabled: false,
@@ -65,6 +67,12 @@ export const usePlayerStore = defineStore("player", {
       _audio: null,
       _video: null,
       _syncTimer: null,
+      _videoReadyPlayTimeout: null, // 等 video canplay 的兜底定时器
+      _videoCanPlayHandler: null, // 一次性 canplay 处理器(开播用,可换源前先解绑)
+      _lastSyncSeekAt: 0, // 音画同步最近一次程序 seek 时间(seeked 回流音频用)
+      _mvLoadingSuppressed: false, // 恢复可见瞬间抑制「缓冲中」提示
+      replacingEntry: null, // 「替换歌曲」上下文(存条目对象引用,占位升级 id 变化不丢目标)
+      _consecutiveMatchFailures: 0, // 占位匹配连续失败计数(防全失败列表死循环)
       _loading: false,
     };
   },
@@ -123,6 +131,8 @@ export const usePlayerStore = defineStore("player", {
       // 音画双向同步:用户在画面控制条上的操作同步到音频
       videoEl.addEventListener("pause", () => {
         if (this._tearingDown || !this.mvEnabled) return;
+        // 页面隐藏期间的 pause 是浏览器节流,不是用户操作:不联动停音频
+        if (document.hidden) return;
         if (this._audio && !this._audio.paused) {
           this._audio.pause();
           this.playing = false;
@@ -134,9 +144,37 @@ export const usePlayerStore = defineStore("player", {
       });
       videoEl.addEventListener("seeked", () => {
         if (this._tearingDown || !this.mvEnabled) return;
+        // 音画同步程序触发的 seek 不回流音频:音频才是主时钟,
+        // 回流会把它回跳到 seek 目标,每次追平都造成一次可闻回退
+        if (performance.now() - this._lastSyncSeekAt < 500) return;
         if (this._audio && !this._audio.seeking) {
           this._audio.currentTime = videoEl.currentTime;
           this.currentTime = videoEl.currentTime;
+        }
+      });
+      // 页面隐藏(切后台/最小化窗口)时浏览器可能节流暂停 video。
+      // MV 模式保持后台播放:隐藏期间的 pause 不联动停音频(见上)。
+      // 恢复可见时:短暂抑制「缓冲中」提示(优先显示旧帧,避免恢复瞬间闪提示);
+      // 若画面被浏览器停掉而音频仍在播,则续播画面,进度追平交给同步循环
+      // 按策略处理(小漂移播放率追,大漂移且目标已缓冲才 seek)。
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) return;
+        this._mvLoadingSuppressed = true;
+        setTimeout(() => (this._mvLoadingSuppressed = false), 800);
+        const v = this._video;
+        if (
+          this.mvEnabled &&
+          this.playing &&
+          v?.src &&
+          v.paused &&
+          this._audio &&
+          !this._audio.paused
+        ) {
+          // 画面被浏览器停掉:直接跳回音频当前位置续播(seek 的重新缓冲由
+          // 上面的提示抑制窗口盖住,不闪「缓冲中」);程序 seek 不回跳音频
+          this._lastSyncSeekAt = performance.now();
+          v.currentTime = this._audio.currentTime;
+          v.play().catch(() => {});
         }
       });
     },
@@ -280,6 +318,64 @@ export const usePlayerStore = defineStore("player", {
       this.playing = false;
     },
 
+    // -------------------------------------------------- 替换歌曲源
+    /** 进入替换上下文(entry 为播放列表条目对象引用)。
+     *  App.vue 监听后以原歌名(orig_name,无则标题)发起搜索。 */
+    startReplace(entry) {
+      this.replacingEntry = entry;
+    },
+
+    cancelReplace() {
+      this.replacingEntry = null;
+    },
+
+    /** 用搜索结果替换上下文条目(就地替换,保留 orig 字段)。
+     *  目标 bvid 已存在于别处 → 移除本条目;替换当前播放条目 → 停播清状态。 */
+    replaceTrack(newTrack) {
+      const entry = this.replacingEntry;
+      this.replacingEntry = null;
+      if (!entry || !this.playlist.includes(entry)) return false;
+      const i = this.playlist.indexOf(entry);
+      const dup = this.playlist.find((t) => t.id === newTrack.id && t !== entry);
+      if (dup) {
+        // 目标已存在:移除本条目(同步当前索引)
+        this.playlist.splice(i, 1);
+        if (this.currentIndex === i) {
+          this.stop();
+          this.resolved = null;
+          this.currentTime = 0;
+          this.duration = 0;
+          this.error = "";
+        } else if (this.currentIndex > i) {
+          this.currentIndex -= 1;
+        }
+      } else {
+        // 首次替换:快照原歌名信息,之后替换始终用原歌名搜索
+        if (!entry.orig_name) {
+          entry.orig_name = entry.title;
+          entry.orig_artists = entry.artist ? [entry.artist] : [];
+        }
+        entry.id = newTrack.id;
+        entry.title = newTrack.title;
+        entry.artist = newTrack.artist;
+        entry.mid = newTrack.mid || 0;
+        entry.cover = newTrack.cover;
+        entry.duration = newTrack.duration;
+        entry.source = newTrack.source;
+        if (this.currentIndex === i) {
+          // 替换的是正在播放的曲目:停播清状态,条目保留(点行可重播新源)
+          this.stop();
+          this.resolved = null;
+          this.currentTime = 0;
+          this.duration = 0;
+          this.error = "";
+        }
+      }
+      this._history = [];
+      this._savePlaylist();
+      return true;
+    },
+
     // -------------------------------------------------- 播放控制
     /** 播放列表第 index 首。record=false 时不计入播放历史(「上一首」回退用) */
     async playTrack(index, record = true) {
@@ -307,13 +403,25 @@ export const usePlayerStore = defineStore("player", {
       // 注意:mvEnabled 是「模式」,跨曲目保持,不在切歌时重置
       this.error = "";
       this._loading = true;
+      if (!track.id.startsWith("match:")) this._consecutiveMatchFailures = 0;
       try {
         // 后端决策:plan 接口一次给出档位列表 + 播放来源 + 补缓存决策,
-        // 前端无需感知本地/在线
+        // 前端无需感知本地/在线;占位曲目(match:)由后端即时匹配
         const plan = await trackPlan(track.id, {
           audioQuality: this.qualityId,
           videoQuality: this.videoQualityId,
         });
+        // 占位曲目匹配成功:条目就地升级为真实 bvid(须先于下方所有 track.id
+        // 使用点;orig_name/orig_artists 原样保留,供「替换歌曲」使用)
+        if (plan.match_chosen && track.id.startsWith("match:")) {
+          track.id = plan.track.id;
+          track.title = plan.track.title;
+          track.artist = plan.track.artist;
+          track.cover = plan.track.cover;
+          track.duration = plan.track.duration;
+          track.source = plan.track.source;
+          this._savePlaylist();
+        }
         // 补缓存决策:拿到即执行,不随「切歌丢弃」一起丢
         // (快速连点多首时,每一首的下载任务都必须入队)
         if (
@@ -345,6 +453,21 @@ export const usePlayerStore = defineStore("player", {
         // MV 模式开启时,播到视频曲目自动续画面(模式跨曲目保持)
         if (this.mvEnabled) await this._startMv(track);
       } catch (e) {
+        // 占位曲目匹配失败:提示并跳过(计数兜底,防全失败列表无限循环)
+        if (track.id.startsWith("match:")) {
+          this._consecutiveMatchFailures += 1;
+          if (
+            this.playlist.length <= 1 ||
+            this._consecutiveMatchFailures >= this.playlist.length
+          ) {
+            this.error = `匹配失败:${track.title},已停止`;
+            this.stop();
+            return;
+          }
+          this.error = `匹配失败:${track.title},已跳过`;
+          await this.next(true);
+          return;
+        }
         this.error = `解析失败: ${e.message}`;
       } finally {
         this._loading = false;
@@ -580,8 +703,53 @@ export const usePlayerStore = defineStore("player", {
       this._video.src = playUrl(track.id, "video", stream.quality_id);
       this._video.muted = true;
       this._video.currentTime = this._audio?.currentTime ?? 0;
-      if (this.playing) await this._video.play();
+      this.mvReady = false;
+      // 音频保持播放,视频缓冲到可播放(canplay)再开播并追平音频进度,
+      // 避免开播瞬间解码/网络争抢造成音频顿挫
+      if (this.playing) this._playVideoWhenReady(track);
       this._startSync();
+    },
+
+    /** 等画面缓冲到可播放再启动,开播前追平音频进度;5s 兜底直接播。 */
+    _playVideoWhenReady(track) {
+      const v = this._video;
+      if (!v) return;
+      // 换源/重开前先解绑旧的处理器与兜底定时器
+      if (this._videoCanPlayHandler) {
+        v.removeEventListener("canplay", this._videoCanPlayHandler);
+        this._videoCanPlayHandler = null;
+      }
+      clearTimeout(this._videoReadyPlayTimeout);
+
+      let onCanPlay = null;
+      const cleanup = () => {
+        v.removeEventListener("canplay", onCanPlay);
+        this._videoCanPlayHandler = null;
+        clearTimeout(this._videoReadyPlayTimeout);
+      };
+      onCanPlay = () => {
+        if (!this.mvEnabled || !v.src || !this.playing) return cleanup(); // 已关模式/暂停
+        if (this.currentTrack?.id !== track.id) return cleanup(); // 已切歌
+        const target = this._audio?.currentTime ?? 0;
+        // canplay 只保证当前播放位置的缓冲;未对齐音频进度则先 seek 再等下一次
+        // canplay(追平缓冲期间音频的推进),对齐后正式开播
+        if (Math.abs(v.currentTime - target) > 0.5) {
+          this._lastSyncSeekAt = performance.now(); // 程序 seek,不回跳音频
+          v.currentTime = target;
+          return;
+        }
+        cleanup();
+        v.play().catch(() => {});
+      };
+      this._videoCanPlayHandler = onCanPlay;
+      v.addEventListener("canplay", onCanPlay);
+      this._videoReadyPlayTimeout = setTimeout(() => {
+        cleanup();
+        // 兜底:慢速网络下不再等待,直接开播,进度交给 _startSync 漂移校正
+        if (this.mvEnabled && v.src && this.playing && this.currentTrack?.id === track.id) {
+          v.play().catch(() => {});
+        }
+      }, 5000);
     },
 
     /** 切换画质(MV 开启时保持进度续播);选中远程档自动后台补下该画质档 */
@@ -595,7 +763,9 @@ export const usePlayerStore = defineStore("player", {
         const wasPlaying = !this._video.paused;
         this._video.src = playUrl(this.currentTrack.id, "video", stream.quality_id);
         this._video.currentTime = t;
-        if (wasPlaying) await this._video.play();
+        this.mvReady = false;
+        // 与首次开画一致:缓冲到位再播,避免换档瞬间音频顿挫
+        if (wasPlaying) this._playVideoWhenReady(this.currentTrack);
       }
       // 切档后重拉 plan:补缓存决策由后端给出
       this._syncPlanDownload();
@@ -606,12 +776,52 @@ export const usePlayerStore = defineStore("player", {
       this._syncTimer = setInterval(() => {
         const v = this._video;
         if (!v || !this.mvEnabled || !v.src) return;
-        const drift = v.currentTime - (this._audio?.currentTime ?? 0);
-        // 画面落后音频过多且正在播放时校正(暂停时不动,尊重用户操作)
-        if (drift < -0.8 && !v.seeking && !v.paused) {
-          v.currentTime = this._audio.currentTime;
+        const a = this._audio;
+        if (!a || a.paused || v.paused || v.seeking) return; // 暂停/seek 中不干预
+        const drift = v.currentTime - a.currentTime; // <0 画面落后,>0 画面超前
+        // 0.3s 内的自然抖动不干预
+        if (Math.abs(drift) <= 0.3) {
+          if (v.playbackRate !== 1) v.playbackRate = 1;
+          return;
         }
-      }, 1500);
+        // seek 目标(音频当前位置)是否已被缓冲覆盖:未覆盖时 seek 会触发
+        // waiting 重新缓冲,宁可用播放率慢慢追,等缓冲覆盖后再 seek
+        const target = a.currentTime;
+        const covered = (() => {
+          for (let i = 0; i < v.buffered.length; i++) {
+            if (v.buffered.start(i) - 0.5 <= target && target <= v.buffered.end(i)) {
+              return true;
+            }
+          }
+          return false;
+        })();
+        const now = performance.now();
+        const seekCool = now - this._lastSyncSeekAt >= 2000; // seek 冷却,防连续 seek 反复清缓冲
+        if (drift < 0) {
+          // 画面落后:小幅落后用 1.03~1.25 倍速柔性追平(画面静音,不打断缓冲、
+          // 无感);落后超 4s 且目标已缓冲时,seek 一次性追平
+          if (Math.abs(drift) > 4) {
+            if (covered && seekCool) {
+              this._lastSyncSeekAt = now;
+              v.currentTime = target;
+              v.playbackRate = 1;
+            }
+          } else {
+            v.playbackRate = Math.min(1.25, 1 + Math.abs(drift) * 0.06);
+          }
+        } else {
+          // 画面超前(音频卡顿后恢复):画面 0.9 倍速等音频,超 4s 且目标已缓冲时回跳
+          if (drift > 4) {
+            if (covered && seekCool) {
+              this._lastSyncSeekAt = now;
+              v.currentTime = target;
+              v.playbackRate = 1;
+            }
+          } else {
+            v.playbackRate = 0.9;
+          }
+        }
+      }, 600);
     },
 
     /** 清理画面元素。resetMode=true 时同时关闭 MV 模式(用户手动关闭)。 */
@@ -620,8 +830,14 @@ export const usePlayerStore = defineStore("player", {
       this.mvReady = false;
       this._tearingDown = true;
       clearInterval(this._syncTimer);
+      clearTimeout(this._videoReadyPlayTimeout);
+      if (this._videoCanPlayHandler && this._video) {
+        this._video.removeEventListener("canplay", this._videoCanPlayHandler);
+      }
+      this._videoCanPlayHandler = null;
       if (this._video) {
         this._video.pause();
+        this._video.playbackRate = 1; // 归位:换源后播放率由浏览器重置,显式归位更稳
         this._video.removeAttribute("src");
         this._video.load();
       }
@@ -641,7 +857,8 @@ export const usePlayerStore = defineStore("player", {
      *  按下后列表状态保持不动,后端并发快速检查,检查完成后一次刷新:
      *  需要下载的显示下载中/待下载,其余保持绿勾。 */
     async downloadAll(desiredAudio = -1, desiredVideo = -1) {
-      const ids = this.playlist.map((t) => t.id);
+      // 占位曲目(match:)未匹配无源可下,不进入下载队列
+      const ids = this.playlist.map((t) => t.id).filter((id) => !id.startsWith("match:"));
       if (!ids.length) return;
       await queueCache(ids, {
         force: true,

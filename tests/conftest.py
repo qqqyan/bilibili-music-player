@@ -3,7 +3,7 @@
 import pytest
 from fastapi import FastAPI
 
-from bilibili_music_player.routers import auth, cache, playlist, search, settings, track
+from bilibili_music_player.routers import auth, cache, match, playlist, search, settings, track
 
 
 @pytest.fixture()
@@ -16,6 +16,7 @@ def test_app():
     app.include_router(playlist.router)
     app.include_router(settings.router)
     app.include_router(auth.router)
+    app.include_router(match.router)
 
     @app.get("/api/health")
     async def health():

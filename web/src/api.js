@@ -240,3 +240,67 @@ export function formatTime(secs) {
   const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
   return `${h > 0 ? h + ":" : ""}${mm}:${String(s).padStart(2, "0")}`;
 }
+
+// ---------------------------------------------------------------- 歌单匹配
+
+/** POST JSON 辅助(与现有手写 fetch 同约定:错误体取 detail) */
+async function postJson(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  let data = {};
+  try {
+    data = await res.json();
+  } catch {
+    /* 忽略非 JSON 错误体 */
+  }
+  if (!res.ok) throw new Error(data.detail || res.statusText);
+  return data;
+}
+
+/** 当前匹配任务(summary=true 返回轻量字典,轮询用) */
+export function getMatchJob(summary = false) {
+  return request(`/api/match/job${summary ? "?summary=true" : ""}`);
+}
+
+/** 导入歌单(网易云 JSON 或匹配结果 JSONL,自动识别;覆盖式) */
+export function importMatch(name, content, sourcePlatform = "netease") {
+  return postJson("/api/match/import", {
+    name,
+    content,
+    source_platform: sourcePlatform,
+  });
+}
+
+export function matchStart() {
+  return postJson("/api/match/start", {});
+}
+
+export function matchPause() {
+  return postJson("/api/match/pause", {});
+}
+
+export function matchResume() {
+  return postJson("/api/match/resume", {});
+}
+
+export function matchReset() {
+  return postJson("/api/match/reset", {});
+}
+
+/** 人工选择候选(bvid=null 标记无匹配) */
+export function matchChoose(neteaseId, bvid) {
+  return postJson("/api/match/choose", { netease_id: neteaseId, bvid });
+}
+
+/** 批量把选中歌曲的候选加入播放列表 */
+export function matchApply(neteaseIds) {
+  return postJson("/api/match/apply", { netease_ids: neteaseIds });
+}
+
+/** 把任务歌曲以占位条目加入播放列表(neteaseIds 省略 = 全部) */
+export function placeholderAdd(neteaseIds = null) {
+  return postJson("/api/match/placeholder", { netease_ids: neteaseIds });
+}
