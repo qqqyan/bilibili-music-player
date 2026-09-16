@@ -132,10 +132,14 @@ def build_queries(
 ) -> list[str]:
     """生成搜索关键词候选(优先级从高到低),去重不截断(搜索时限 MAX_QUERIES)。"""
     sa = [_search_artist(a) for a in artists]
+    # 歌手可能为空(网易云 ar 为空数组、种子 JSONL 缺 artists 字段):后面
+    # 各处取 sa[0] 会 IndexError → 500,空歌手时退化为只用歌名搜索
+    lead = sa[0] if sa else ""
     aliases = resolve_target_names(artists, artist_map, source_platform, target_platform)
     queries: list[str] = []
     # 1) 主歌手 + 歌名
-    queries.append(f"{sa[0]} {name}")
+    if lead:
+        queries.append(f"{lead} {name}")
     # 2) 全部歌手 + 歌名(合唱/feat 场景)
     if len(sa) > 1:
         queries.append(f"{' '.join(sa)} {name}")
@@ -146,8 +150,8 @@ def build_queries(
     queries.append(name)
     # 5) 译名/别名变体(B 站上传可能用译名标题)
     for v in [*tns, *alia]:
-        if v and v != name:
-            queries.append(f"{sa[0]} {v}")
+        if v and v != name and lead:
+            queries.append(f"{lead} {v}")
     for v in [*tns, *alia]:
         if v and v != name:
             queries.append(v)
@@ -306,15 +310,24 @@ def parse_netease_json(data: list, artist_map: list[dict],
         raise ValueError("无法识别为网易云歌单 JSON(空数组或非列表)")
     best: dict[tuple, dict] = {}
     for s in data:
-        if not isinstance(s, dict) or not s.get("name") or not isinstance(s.get("ar"), list):
-            raise ValueError("无法识别为网易云歌单 JSON(缺少 name/ar 字段)")
-        artists = [a["name"] for a in s["ar"] if a.get("name")]
+        # id 同样必填:下面直接取 s["id"],漏校验会以 KeyError 冒泡成 500
+        if (
+            not isinstance(s, dict)
+            or not s.get("name")
+            or not isinstance(s.get("ar"), list)
+            or s.get("id") is None
+        ):
+            raise ValueError("无法识别为网易云歌单 JSON(缺少 name/ar/id 字段)")
+        # ar 元素/ al 未必是对象(部分导出工具会拍平成字符串):直接 .get / ["name"]
+        # 会 AttributeError → 500,这类畸形输入应当和缺字段一样归一为 ValueError
+        artists = [a["name"] for a in s["ar"] if isinstance(a, dict) and a.get("name")]
+        al = s["al"] if isinstance(s.get("al"), dict) else {}
         key = (s["name"], tuple(artists))
         if key not in best or (s.get("dt") or 0) > (best[key].get("dt") or 0):
             best[key] = {
                 "netease_id": s["id"], "name": s["name"], "duration_ms": s.get("dt") or 0,
                 "tns": s.get("tns") or [], "alia": s.get("alia") or [],
-                "cover": (s.get("al") or {}).get("picUrl") or "",
+                "cover": al.get("picUrl") or "",
             }
     return [
         _new_song(rec, list(key[1]), artist_map, source_platform, target_platform)
@@ -348,7 +361,14 @@ def parse_seeded_jsonl(text: str, artist_map: list[dict],
     for rec in by_id.values():
         artists = list(rec.get("artists") or [])
         aliases = resolve_target_names(artists, artist_map, source_platform, target_platform)
-        candidates = score_candidates(rec, list(rec.get("candidates") or []), aliases)[:5]
+        # 打分只读 name/artists/duration_ms,而 score_candidates 会硬取这些键:
+        # JSONL 记录缺字段时不能把原始 rec 递进去(KeyError → 500),用兜底对象
+        song_like = {
+            "name": rec.get("name") or "",
+            "artists": artists,
+            "duration_ms": rec.get("duration_ms") or 0,
+        }
+        candidates = score_candidates(song_like, list(rec.get("candidates") or []), aliases)[:5]
         status = rec.get("status")
         chosen = None
         if status == "matched" and rec.get("chosen"):
@@ -876,6 +896,12 @@ class MatchManager:
             if ranked_now and ranked_now[0]["score"] >= AUTO_SCORE:
                 break
             await asyncio.sleep(random.uniform(REQUEST_MIN, REQUEST_MAX))
+
+        # 本轮搜索期间用户已人工定夺(选定候选 / 标记无匹配):整首保留不动。
+        # choose() 已写入终态状态,这里继续写回会冲掉刚点的手工选择,且
+        # manual 的歌不再是 pending,不会被再次搜索,不存在反复跳过。
+        if song.get("manual"):
+            return
 
         ranked = score_candidates(song, all_candidates, aliases)
         song["candidates"] = ranked[:5]

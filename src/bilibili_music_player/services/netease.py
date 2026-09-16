@@ -352,6 +352,17 @@ def _replace_cookie(cookie: str, key: str, value: str) -> str:
 # ---------------------------------------------------------------- 数据
 # 搜索/歌曲 URL/详情走老式明文接口(weapi cloudsearch 匿名已被墙,老接口实测可用)
 
+def _check_search_result(data: dict) -> None:
+    """老搜索接口正常响应必带 result;缺 result 且 code 非 200 多为风控拦截。
+
+    不校验的话风控会被伪装成「搜不到任何结果」,排查时看不到真实原因。
+    """
+    if "result" not in data and data.get("code") not in (None, 200):
+        raise ValueError(
+            f"网易云搜索失败(code={data.get('code')}),可能触发风控,请稍后再试"
+        )
+
+
 def search(keyword: str, page: int = 1, cookie: str = "") -> tuple[list[dict], int]:
     """搜索歌曲 → (条目列表, 总命中数)。"""
     data = _get(
@@ -359,13 +370,19 @@ def search(keyword: str, page: int = 1, cookie: str = "") -> tuple[list[dict], i
         cookie,
         {"s": keyword, "type": 1, "limit": 20, "offset": (page - 1) * 20},
     )
+    _check_search_result(data)
     result = data.get("result") or {}
     total = result.get("songCount") or 0
     return result.get("songs") or [], int(total)
 
 
-def song_url(song_id: int, br: int, cookie: str = "") -> tuple[str, str]:
-    """获取播放地址 → (url, 编码格式 mp3/flac);无地址返回 ("", "")。"""
+def song_url(song_id: int, br: int, cookie: str = "") -> tuple[str, str, bool]:
+    """获取播放地址 → (url, 编码格式 mp3/flac, 是否仅试听片段)。
+
+    无地址返回 ("", "", False)。VIP 歌在无会员登录态下会返回 30 秒试听片段
+    (响应 data[0].freeTrialInfo 非空),这种 url 不能当完整歌曲播放/下载,
+    一律按无地址处理并置试听标记,由调用方给出明确提示而不是静默播 30 秒。
+    """
     headers = {**_BASE_HEADERS}
     if cookie:
         headers["Cookie"] = cookie
@@ -379,13 +396,15 @@ def song_url(song_id: int, br: int, cookie: str = "") -> tuple[str, str]:
     data = resp.json()
     items = data.get("data") or []
     if not items:
-        return "", ""
+        return "", "", False
     it = items[0]
+    if it.get("freeTrialInfo"):
+        return "", "", True
     if not it.get("url"):
-        return "", ""
+        return "", "", False
     # type 字段:"flac"=无损,"mp3"=有损(旧接口无 type 时按请求档推断)
     kind = it.get("type") or ("flac" if br >= 999000 else "mp3")
-    return it["url"], kind
+    return it["url"], kind, False
 
 
 def song_detail(song_ids: list[int], cookie: str = "") -> list[dict]:
@@ -422,6 +441,7 @@ def search_artists(keyword: str, cookie: str = "") -> list[dict]:
         cookie,
         {"s": keyword, "type": 100, "limit": 12, "offset": 0},
     )
+    _check_search_result(data)
     result = data.get("result") or {}
     return result.get("artists") or []
 

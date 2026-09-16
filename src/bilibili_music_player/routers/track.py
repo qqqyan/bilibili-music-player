@@ -221,7 +221,12 @@ async def api_play(
                 )
                 return FileResponse(path, media_type=media)
     # 远程:解析 + 选档 + 代理流
-    resolved = await resolve_track(track_id)
+    # 解析失败(下架/无版权/网易云未登录等)与 plan 接口一致地归一为 502,
+    # 不捕获的话 ValueError 会冒泡成 500(媒体元素只会看到「加载失败」)
+    try:
+        resolved = await resolve_track(track_id)
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=str(e))
     streams = resolved.video_streams if kind == "video" else resolved.audio_streams
     stream = pick_stream_by_quality(streams, quality_id, kind)
     if stream is None:

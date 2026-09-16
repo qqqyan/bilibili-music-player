@@ -17,29 +17,37 @@ const qrImage = ref("");
 const qrText = ref("加载登录二维码…");
 const sessionId = ref("");
 const expired = ref(false);
+const qrError = ref(""); // 获取/轮询失败(区别于「已过期」,同样给重试入口)
 const showManual = ref(false);
 const manualCookie = ref("");
 const manualError = ref("");
 const manualBusy = ref(false);
 let timer = null;
+let failCount = 0; // 轮询连续失败次数(瞬时断网容忍,持续失败则停)
 
 async function startQrcode() {
   expired.value = false;
+  qrError.value = "";
+  failCount = 0;
+  clearInterval(timer);
   try {
     const res = await neteaseQrcode();
     sessionId.value = res.session_id;
     qrImage.value = res.image_data_url;
     qrText.value = "请用网易云音乐 App 扫码";
-    clearInterval(timer);
     timer = setInterval(poll, 2000);
   } catch (e) {
-    qrText.value = `二维码获取失败: ${e.message}`;
+    // 失败要给重试入口:否则页面只剩一行错误文案,只能靠手动 cookie 兜底
+    qrImage.value = "";
+    qrText.value = "";
+    qrError.value = e.message || "获取二维码失败";
   }
 }
 
 async function poll() {
   try {
     const res = await neteaseQrcodeStatus(sessionId.value);
+    failCount = 0;
     if (res.status === "scan") {
       qrText.value = "请用网易云音乐 App 扫码";
     } else if (res.status === "confirm") {
@@ -54,8 +62,20 @@ async function poll() {
       expired.value = true;
       qrText.value = "二维码已过期";
     }
-  } catch {
-    /* 轮询瞬断忽略 */
+  } catch (e) {
+    // 后端 404 = 会话已被清理(过期):必须停轮询并给重试入口,
+    // 否则会无限 2s 轮询,界面永远停在「请扫码」而二维码其实早已失效
+    if (e.status === 404) {
+      clearInterval(timer);
+      expired.value = true;
+      qrText.value = "二维码已过期";
+      return;
+    }
+    if (++failCount >= 5) {
+      clearInterval(timer);
+      qrText.value = "";
+      qrError.value = `轮询失败:${e.message}`;
+    }
   }
 }
 
@@ -112,8 +132,9 @@ onUnmounted(() => clearInterval(timer));
     </template>
     <template v-else>
       <img v-if="qrImage" class="qr" :src="qrImage" alt="网易云登录二维码" />
-      <div class="qr-text">{{ qrText }}</div>
-      <button v-if="expired" class="refresh-btn" @click="startQrcode">
+      <div v-if="qrText" class="qr-text">{{ qrText }}</div>
+      <div v-if="qrError" class="manual-error">{{ qrError }}</div>
+      <button v-if="expired || qrError" class="refresh-btn" @click="startQrcode">
         重新获取二维码
       </button>
       <button v-if="!showManual" class="manual-toggle" @click="showManual = true">

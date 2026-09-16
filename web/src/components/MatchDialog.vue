@@ -21,6 +21,7 @@ const job = ref(null); // 全量任务(打开/进度变化时拉取)
 const error = ref("");
 const notice = ref("");
 const busy = ref(false);
+const importing = ref(false); // 导入中的独立标记(busy 被多个操作共用,不能当文案依据)
 
 // 导入表单
 const importText = ref("");
@@ -140,6 +141,7 @@ async function doImport() {
     return;
   }
   busy.value = true;
+  importing.value = true;
   error.value = "";
   try {
     await importMatch(importName.value || "歌单", importText.value);
@@ -161,6 +163,7 @@ async function doImport() {
     error.value = e.message || "导入失败";
   } finally {
     busy.value = false;
+    importing.value = false;
   }
 }
 
@@ -258,7 +261,9 @@ async function onResetClick() {
           导入后全部加入播放列表(占位,播放时即时匹配)
         </label>
         <div class="import-actions">
-          <button class="primary" :disabled="busy" @click="doImport">导入</button>
+          <button class="primary" :disabled="busy" @click="doImport">
+            {{ importing ? "导入中…" : "导入" }}
+          </button>
         </div>
         <div v-if="error" class="error">{{ error }}</div>
       </div>
@@ -299,7 +304,7 @@ async function onResetClick() {
           </div>
         </div>
 
-        <MatchList :job="job" @applied="emit('applied')" />
+        <MatchList :job="job" :loading="!job" @applied="emit('applied')" />
 
         <div v-if="notice" class="notice">{{ notice }}</div>
         <div v-if="error" class="error">{{ error }}</div>

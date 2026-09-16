@@ -132,15 +132,29 @@ async def _resolve_netease(song_id: int) -> ResolvedTrack:
     start = 0 if cookie else 1
     url = kind = ""
     quality_label = quality_id = 0
+    trial_only = False
     for label, qid, br in ne.NETEASE_LEVELS[start:]:
         try:
-            url, kind = await _asyncio.to_thread(ne.song_url, song_id, br, cookie)
+            url, kind, trial = await _asyncio.to_thread(ne.song_url, song_id, br, cookie)
         except Exception:
             continue
+        if trial:
+            # 是否试听与码率无关(同一首歌各档一致),不必再试低档位
+            trial_only, url = True, ""
+            break
         if url:
             quality_label, quality_id = label, qid
             break
     if not url:
+        if trial_only:
+            # 匿名与「已登录但登录过期/无会员」都表现为只有试听,分开提示:
+            # 后者若只说「请登录会员账号」,用户看设置页明明显示已登录会一头雾水
+            if cookie:
+                raise ValueError(
+                    "该歌曲为 VIP 专享,当前账号无完整播放权限(登录已过期或无会员);"
+                    "请在设置中重新登录网易云会员账号"
+                )
+            raise ValueError("该歌曲为 VIP 专享,请先在设置中登录网易云会员账号")
         raise ValueError("未获取到播放地址(可能需登录或该歌曲无版权)")
 
     mime = ne.NETEASE_MIME.get(kind, "audio/mpeg")

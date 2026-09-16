@@ -11,6 +11,8 @@ const summary = ref(null);
 const job = ref(null);
 const busy = ref(false);
 const confirmReset = ref(false);
+const notice = ref(""); // 操作成功提示
+const error = ref(""); // 操作失败提示(与 notice 分色,不能共用绿色文案位)
 let resetTimer = null;
 let pollTimer = null;
 
@@ -78,7 +80,11 @@ async function schedulePoll() {
 
 onMounted(schedulePoll);
 
-onUnmounted(() => clearTimeout(pollTimer));
+onUnmounted(() => {
+  clearTimeout(pollTimer);
+  clearTimeout(resetTimer);
+  clearTimeout(placeholderTimer);
+});
 
 const statusText = computed(() => {
   if (!summary.value) return "";
@@ -107,11 +113,12 @@ const progressPct = computed(() => {
 
 async function doStart() {
   busy.value = true;
+  error.value = "";
   try {
     await matchStart();
     await pollOnce();
-  } catch {
-    /* 静默 */
+  } catch (e) {
+    error.value = e.message || "启动搜索失败";
   } finally {
     busy.value = false;
   }
@@ -119,11 +126,12 @@ async function doStart() {
 
 async function doPause() {
   busy.value = true;
+  error.value = "";
   try {
     await matchPause();
     await pollOnce();
-  } catch {
-    /* 静默 */
+  } catch (e) {
+    error.value = e.message || "暂停失败";
   } finally {
     busy.value = false;
   }
@@ -138,12 +146,13 @@ async function onResetClick() {
   clearTimeout(resetTimer);
   confirmReset.value = false;
   busy.value = true;
+  error.value = "";
   try {
     await matchReset();
     summary.value = null;
     job.value = null;
-  } catch {
-    /* 静默 */
+  } catch (e) {
+    error.value = e.message || "重置失败";
   } finally {
     busy.value = false;
   }
@@ -151,20 +160,34 @@ async function onResetClick() {
 
 // ---------------------------------------------------------------- 占位入列
 
-const notice = ref("");
+const confirmPlaceholder = ref(false);
+let placeholderTimer = null;
 
 async function doPlaceholderAdd() {
   busy.value = true;
   notice.value = "";
+  error.value = "";
   try {
     const r = await placeholderAdd();
     notice.value = `已加入 ${r.added} 首占位(播放时即时匹配)`;
     if (r.added > 0) emit("applied");
   } catch (e) {
-    notice.value = e.message || "加入失败";
+    error.value = e.message || "加入失败";
   } finally {
     busy.value = false;
   }
+}
+
+/** 「全部加入」会把整任务(可能几百首)一次灌进播放列表,与「重置」同样二次确认 */
+async function onPlaceholderClick() {
+  if (!confirmPlaceholder.value) {
+    confirmPlaceholder.value = true;
+    placeholderTimer = setTimeout(() => (confirmPlaceholder.value = false), 4000);
+    return;
+  }
+  clearTimeout(placeholderTimer);
+  confirmPlaceholder.value = false;
+  await doPlaceholderAdd();
 }
 </script>
 
@@ -208,14 +231,20 @@ async function doPlaceholderAdd() {
           >
             {{ confirmReset ? "确认重置?" : "重置" }}
           </button>
-          <button class="ghost" :disabled="busy" @click="doPlaceholderAdd">
-            全部加入播放列表(占位)
+          <button
+            class="ghost"
+            :class="{ armed: confirmPlaceholder }"
+            :disabled="busy"
+            @click="onPlaceholderClick"
+          >
+            {{ confirmPlaceholder ? "确认全部加入?" : "全部加入播放列表(占位)" }}
           </button>
         </div>
         <div v-if="notice" class="notice">{{ notice }}</div>
+        <div v-if="error" class="notice notice-error">{{ error }}</div>
       </div>
 
-      <MatchList :job="job" @applied="emit('applied')" />
+      <MatchList :job="job" :loading="!job" @applied="emit('applied')" />
     </template>
   </div>
 </template>
@@ -315,5 +344,12 @@ async function doPlaceholderAdd() {
 .notice {
   font-size: 12px;
   color: #6fd08c;
+}
+.notice-error {
+  color: #e56d6d;
+}
+.ghost.armed {
+  border-color: #e5b56d;
+  color: #e5b56d;
 }
 </style>

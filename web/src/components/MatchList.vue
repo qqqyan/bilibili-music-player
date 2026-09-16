@@ -6,6 +6,9 @@ import { formatTime, matchApply, matchChoose } from "../api";
 
 const props = defineProps({
   job: { type: Object, default: null },
+  // job 为 null 可能是「还没拉到」也可能是「真没任务」,靠它区分,避免
+  // 把加载中显示成「没有歌曲」
+  loading: { type: Boolean, default: false },
 });
 const emit = defineEmits(["applied"]);
 
@@ -47,6 +50,13 @@ const selectableCount = computed(() =>
   filteredSongs.value.filter(isSelectable).length
 );
 
+/** 当前筛选是否已全选:不能用 selected.size 与 selectableCount 比较——勾选是
+ *  跨筛选累加的,切到另一个筛选且数量相同时会误显示成「已全选」 */
+const allFilteredSelected = computed(() => {
+  const ids = filteredSongs.value.filter(isSelectable).map((s) => s.netease_id);
+  return ids.length > 0 && ids.every((id) => selected.value.has(id));
+});
+
 async function onChoose(song, bvid) {
   error.value = "";
   try {
@@ -81,7 +91,14 @@ async function doApply() {
   error.value = "";
   try {
     const r = await matchApply([...selected.value]);
-    notice.value = `新增 ${r.added} 首 / 重复跳过 ${r.skipped_duplicates} 首`;
+    // 后端返回 5 个计数,只报其中 2 个会让「占位就地升级」「去重移除占位」
+    // 静默发生,用户不知道播放列表为什么变了
+    const parts = [`新增 ${r.added} 首`];
+    if (r.upgraded) parts.push(`占位升级 ${r.upgraded} 首`);
+    if (r.removed_duplicates) parts.push(`移除重复占位 ${r.removed_duplicates} 首`);
+    if (r.skipped_duplicates) parts.push(`重复跳过 ${r.skipped_duplicates} 首`);
+    if (r.skipped_not_ready) parts.push(`未就绪跳过 ${r.skipped_not_ready} 首`);
+    notice.value = parts.join(" · ");
     if (r.added > 0) emit("applied");
     selected.value = new Set();
   } catch (e) {
@@ -134,7 +151,8 @@ function onDetailLeave() {
     </div>
 
     <div class="song-list">
-      <div v-if="!filteredSongs.length" class="empty">没有歌曲</div>
+      <div v-if="loading" class="empty">加载中…</div>
+      <div v-else-if="!filteredSongs.length" class="empty">没有歌曲</div>
       <div
         v-for="song in filteredSongs"
         :key="song.netease_id"
@@ -222,7 +240,7 @@ function onDetailLeave() {
       <label class="select-all">
         <input
           type="checkbox"
-          :checked="selectableCount > 0 && selected.size === selectableCount"
+          :checked="allFilteredSelected"
           :disabled="!selectableCount"
           @change="toggleSelectAll"
         />

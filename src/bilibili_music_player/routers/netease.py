@@ -6,6 +6,7 @@ QR 流程(现行 web 端点,实测验证):
     done 时后端从响应 Set-Cookie 提取 MUSIC_U 等保存为登录态。
 """
 
+import asyncio
 import time
 import urllib.parse
 import uuid
@@ -59,13 +60,18 @@ def _song_to_track(s: dict) -> TrackInfo:
 async def api_qrcode():
     """生成扫码登录二维码(SVG data URL)。"""
     _purge_expired()
-    qr = netease.QrSession()
+    # 构造含登录页预热请求、create_qr 是网络调用,均为同步 requests:
+    # 放线程池,否则等待期间整个事件循环被卡住(最坏 45s)
+    qr: netease.QrSession | None = None
     try:
-        unikey = qr.create_qr()
+        qr = await asyncio.to_thread(netease.QrSession)
+        unikey = await asyncio.to_thread(qr.create_qr)
         svg = netease.qr_svg(unikey)
-    except ValueError as e:
-        qr.client.close()
-        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        if qr is not None:
+            qr.close()
+        detail = str(e)[:120] if isinstance(e, ValueError) else f"获取二维码失败: {str(e)[:120]}"
+        raise HTTPException(status_code=502, detail=detail)
     sid = uuid.uuid4().hex
     _qr_sessions[sid] = {"qr": qr, "created_at": time.time()}
     return {
@@ -83,9 +89,11 @@ async def api_qrcode_status(session_id: str):
         raise HTTPException(status_code=404, detail="二维码会话不存在或已过期")
     qr: netease.QrSession = sess["qr"]
     try:
-        status, data, cookie = qr.poll()
+        status, data, cookie = await asyncio.to_thread(qr.poll)
     except ValueError as e:
         raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"轮询失败: {str(e)[:120]}")
     print(f"[netease-qr] {session_id[:8]} status={status}", flush=True)
     if status == "done":
         if not cookie:
@@ -94,7 +102,7 @@ async def api_qrcode_status(session_id: str):
             raise HTTPException(status_code=502, detail="登录成功但未获取到凭证,请重试")
         user: dict = {}
         try:
-            user = netease.user_detail(cookie)
+            user = await asyncio.to_thread(netease.user_detail, cookie)
         except Exception:
             pass  # 用户信息拉取失败不阻断登录
         netease_auth_store.save_auth(cookie, user)
@@ -125,7 +133,7 @@ async def api_status():
 @router.post("/cookie")
 async def api_cookie(req: CookieRequest):
     """手动导入浏览器 cookie 登录(跨设备通用:每台设备用自己浏览器的凭证)。"""
-    user = netease.cookie_user(req.cookie)
+    user = await asyncio.to_thread(netease.cookie_user, req.cookie)
     if user is None:
         raise HTTPException(
             status_code=400, detail="cookie 无效(MUSIC_U 缺失或已过期)"
@@ -149,10 +157,11 @@ async def api_search(
     page: int = Query(1, ge=1),
 ):
     """搜索网易云歌曲(匿名可用;登录后 VIP 曲目可播)。"""
+    cookie = get_netease_cookie()
     try:
-        songs, total = netease.search(keyword, page, get_netease_cookie())
+        songs, total = await asyncio.to_thread(netease.search, keyword, page, cookie)
         # 搜索条目缺专辑封面,批量补详情(带封面)
-        songs = netease.enrich_songs(songs, get_netease_cookie())
+        songs = await asyncio.to_thread(netease.enrich_songs, songs, cookie)
     except ValueError as e:
         raise HTTPException(status_code=502, detail=str(e))
     items = [_song_to_track(s) for s in songs]
@@ -165,7 +174,9 @@ async def api_artists(
 ):
     """搜索网易云歌手(与 bilibili UP 主卡片对齐的字段)。"""
     try:
-        artists = netease.search_artists(keyword, get_netease_cookie())
+        artists = await asyncio.to_thread(
+            netease.search_artists, keyword, get_netease_cookie()
+        )
     except ValueError as e:
         raise HTTPException(status_code=502, detail=str(e))
     items = [
@@ -185,9 +196,10 @@ async def api_artists(
 @router.get("/artist/{artist_id}")
 async def api_artist(artist_id: int):
     """歌手主页:信息 + 热门歌曲(结构对齐 /api/user/{mid})。"""
+    cookie = get_netease_cookie()
     try:
-        info = netease.artist_detail(artist_id, get_netease_cookie())
-        songs = netease.artist_songs(artist_id, get_netease_cookie())
+        info = await asyncio.to_thread(netease.artist_detail, artist_id, cookie)
+        songs = await asyncio.to_thread(netease.artist_songs, artist_id, cookie)
     except ValueError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return {

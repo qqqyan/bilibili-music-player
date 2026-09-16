@@ -1,18 +1,35 @@
 // 后端 API 封装
 
-async function request(path) {
-  const res = await fetch(path);
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      detail = body.detail || detail;
-    } catch {
-      /* 忽略非 JSON 错误体 */
-    }
-    throw new Error(detail);
+/**
+ * 统一请求:解析响应体并把后端 detail 作为 Error.message。
+ * 后端 detail 是面向用户的(如「该歌曲为 VIP 专享…」「二维码会话不存在」),
+ * 只回 statusText 会让界面显示 "Internal Server Error" 这类无用文本。
+ * @param {object} [opts] fetch 选项;额外支持 opts.json(自动序列化为 JSON 体)
+ */
+async function requestJson(path, opts = {}) {
+  const { json, ...init } = opts;
+  if (json !== undefined) {
+    init.method = init.method || "POST";
+    init.headers = { "Content-Type": "application/json", ...(init.headers || {}) };
+    init.body = JSON.stringify(json);
   }
-  return res.json();
+  const res = await fetch(path, init);
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    /* 空响应体/非 JSON(204、纯文本错误页) */
+  }
+  if (!res.ok) {
+    const err = new Error(data?.detail || res.statusText);
+    err.status = res.status; // 调用方据此区分语义(如 404 = 会话已过期)
+    throw err;
+  }
+  return data;
+}
+
+function request(path) {
+  return requestJson(path);
 }
 
 /** 搜索视频(全站),返回 SearchPage;personalized=带登录凭证(个性排序) */
@@ -61,44 +78,26 @@ export function getPlaylist() {
 }
 
 /** 覆盖式保存歌单 */
-export async function savePlaylist(items) {
-  const res = await fetch("/api/playlist", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(items),
-  });
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      detail = (await res.json()).detail || detail;
-    } catch {
-      /* 忽略非 JSON 错误体 */
-    }
-    throw new Error(detail);
-  }
-  return res.json();
+export function savePlaylist(items) {
+  return requestJson("/api/playlist", { method: "PUT", json: items });
 }
 
 /** 批量加入下载队列
  *  priority: 插队;force: 跳过缓存检查;
  *  desired_audio/video_quality: 期望档位(-1=最高,曲目没有该档自动降级) */
-export async function queueCache(
+export function queueCache(
   trackIds,
   { priority = false, force = false, desired_audio = -1, desired_video = -1 } = {}
 ) {
-  const res = await fetch("/api/cache/queue", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  return requestJson("/api/cache/queue", {
+    json: {
       track_ids: trackIds,
       priority,
       force,
       desired_audio_quality: desired_audio,
       desired_video_quality: desired_video,
-    }),
+    },
   });
-  if (!res.ok) throw new Error(`入队失败: ${res.statusText}`);
-  return res.json();
 }
 
 /** 单曲缓存状态 */
@@ -127,10 +126,8 @@ export function authStatus() {
 }
 
 /** 生成登录二维码(返回 session_id 与 PNG data URL) */
-export async function authQrcode() {
-  const res = await fetch("/api/auth/qrcode", { method: "POST" });
-  if (!res.ok) throw new Error(`生成二维码失败: ${res.statusText}`);
-  return res.json();
+export function authQrcode() {
+  return requestJson("/api/auth/qrcode", { method: "POST" });
 }
 
 /** 轮询二维码登录状态 */
@@ -139,17 +136,13 @@ export function authQrcodeStatus(sessionId) {
 }
 
 /** 登出 */
-export async function authLogout() {
-  const res = await fetch("/api/auth/logout", { method: "POST" });
-  if (!res.ok) throw new Error(`登出失败: ${res.statusText}`);
-  return res.json();
+export function authLogout() {
+  return requestJson("/api/auth/logout", { method: "POST" });
 }
 
 /** 密码登录第一步:创建极验验证页(返回内嵌用 URL) */
-export async function passwordPrepare() {
-  const res = await fetch("/api/auth/password/prepare", { method: "POST" });
-  if (!res.ok) throw new Error(`创建验证码失败: ${res.statusText}`);
-  return res.json();
+export function passwordPrepare() {
+  return requestJson("/api/auth/password/prepare", { method: "POST" });
 }
 
 /** 轮询人机验证是否完成 */
@@ -158,37 +151,13 @@ export function passwordGeetestStatus(sessionId) {
 }
 
 /** 密码登录第二步:人机验证完成后提交账号密码 */
-export async function passwordLogin(form) {
-  const res = await fetch("/api/auth/password", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(form),
-  });
-  let body = {};
-  try {
-    body = await res.json();
-  } catch {
-    /* 忽略非 JSON 错误体 */
-  }
-  if (!res.ok) throw new Error(body.detail || `登录失败: ${res.statusText}`);
-  return body;
+export function passwordLogin(form) {
+  return requestJson("/api/auth/password", { json: form });
 }
 
 /** 手动填写凭证登录(从浏览器 Cookie 复制) */
-export async function authCredential(form) {
-  const res = await fetch("/api/auth/credential", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(form),
-  });
-  let body = {};
-  try {
-    body = await res.json();
-  } catch {
-    /* 忽略非 JSON 错误体 */
-  }
-  if (!res.ok) throw new Error(body.detail || `登录失败: ${res.statusText}`);
-  return body;
+export function authCredential(form) {
+  return requestJson("/api/auth/credential", { json: form });
 }
 
 /** 可选档位列表(后端唯一事实来源) */
@@ -202,35 +171,23 @@ export function getSettings() {
 }
 
 /** 合并保存设置(只更新传入字段) */
-export async function saveSettings(patch) {
-  const res = await fetch("/api/settings", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-  if (!res.ok) throw new Error(`保存设置失败: ${res.statusText}`);
-  return res.json();
+export function saveSettings(patch) {
+  return requestJson("/api/settings", { method: "PUT", json: patch });
 }
 
 /** 清空全部本地缓存 */
-export async function clearCache() {
-  const res = await fetch("/api/cache", { method: "DELETE" });
-  if (!res.ok) throw new Error(`清空失败: ${res.statusText}`);
-  return res.json();
+export function clearCache() {
+  return requestJson("/api/cache", { method: "DELETE" });
 }
 
 /** 遍历全部缓存,每首只保留音频/视频最高档 */
-export async function cleanupCache() {
-  const res = await fetch("/api/cache/cleanup", { method: "POST" });
-  if (!res.ok) throw new Error(`清理失败: ${res.statusText}`);
-  return res.json();
+export function cleanupCache() {
+  return requestJson("/api/cache/cleanup", { method: "POST" });
 }
 
 /** 删除单曲缓存 */
-export async function deleteCacheTrack(trackId) {
-  const res = await fetch(`/api/cache/${trackId}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`删除失败: ${res.statusText}`);
-  return res.json();
+export function deleteCacheTrack(trackId) {
+  return requestJson(`/api/cache/${trackId}`, { method: "DELETE" });
 }
 
 /** 格式化秒数为 m:ss / h:mm:ss */
@@ -247,20 +204,8 @@ export function formatTime(secs) {
 // ---------------------------------------------------------------- 歌单匹配
 
 /** POST JSON 辅助(与现有手写 fetch 同约定:错误体取 detail) */
-async function postJson(path, body) {
-  const res = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  let data = {};
-  try {
-    data = await res.json();
-  } catch {
-    /* 忽略非 JSON 错误体 */
-  }
-  if (!res.ok) throw new Error(data.detail || res.statusText);
-  return data;
+function postJson(path, body) {
+  return requestJson(path, { json: body });
 }
 
 /** 当前匹配任务(summary=true 返回轻量字典,轮询用) */
