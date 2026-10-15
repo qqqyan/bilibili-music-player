@@ -83,16 +83,24 @@ uv run python pyinstaller/build_release.py   # 自动 npm run build + PyInstalle
 
 ## 快速开始
 
+需要先安装 uv 和 Node.js(含 npm)。以下命令从项目根目录执行,前后端分别使用一个终端,并保持两个终端运行。
+
+**终端 1:启动后端(端口 8000)**
+
 ```bash
-# 1. 后端(端口 8000)
 uv sync
 uv run bilibili-music-player
-
-# 2. 前端(端口 5173,dev 模式代理 /api 到后端)
-cd web && npm install && npm run dev
-
-# 打开 http://localhost:5173
 ```
+
+**终端 2:启动前端(端口 5173,dev 模式代理 /api 到后端)**
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+启动后打开 http://localhost:5173。
 
 ## 登录(可选,获取更高音质)
 
