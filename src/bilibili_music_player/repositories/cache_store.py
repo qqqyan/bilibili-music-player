@@ -18,7 +18,7 @@ CACHE_DIR = PROJECT_ROOT / "data" / "cache"
 _lock = asyncio.Lock()
 
 from ..quality import (  # noqa: E402
-    QUALITY_ORDER,
+    order_of,
     quality_label,
     video_quality_label,
 )
@@ -88,8 +88,6 @@ def _scan_local_media(track_id: str, kind: str) -> list[dict]:
         )
     if kind == "audio":
         # 按音质从低到高排序(数值大小与音质高低不完全一致,需按顺序表)
-        from ..quality import order_of
-
         result.sort(key=lambda q: order_of(q["quality_id"], "audio"))
     else:
         # 视频画质枚举值恰与画质正相关,数值排序即可
@@ -151,33 +149,25 @@ def _delete_sync(track_id: str) -> None:
     shutil.rmtree(_track_dir(track_id), ignore_errors=True)
 
 
-def _cleanup_lower_sync(track_id: str, kind: str, keep_quality_id: int) -> None:
-    """删除同类型中比 keep_quality_id 更低档的本地文件。
+def _cleanup_media_files(track_dir: Path, kind: str) -> list[tuple[Path, int]]:
+    """只选完整媒体文件,兼容网易云与旧版缓存扩展名。"""
+    prefix = "v" if kind == "video" else "q"
+    extensions = {".mp4"} if kind == "video" else {".m4a", ".mp3", ".flac"}
+    files = []
+    for path in track_dir.glob(f"{prefix}*"):
+        quality_id = path.stem.removeprefix(prefix)
+        if path.is_file() and path.suffix in extensions and quality_id.isdigit():
+            files.append((path, int(quality_id)))
+    return files
 
-    音质按 QUALITY_ORDER 比较(数值不可靠);视频按数值比较。
-    """
-    dir_path = _track_dir(track_id)
-    if not dir_path.exists():
-        return
-    keep_order = (
-        QUALITY_ORDER.index(keep_quality_id)
-        if kind == "audio" and keep_quality_id in QUALITY_ORDER
-        else keep_quality_id
-    )
-    prefix, ext = ("v", ".mp4") if kind == "video" else ("q", ".m4a")
-    for f in dir_path.glob(f"{prefix}*{ext}"):
-        try:
-            qid = int(f.stem.removeprefix(prefix))
-        except ValueError:
-            continue
-        qid_order = (
-            QUALITY_ORDER.index(qid)
-            if kind == "audio" and qid in QUALITY_ORDER
-            else qid
-        )
-        if qid_order < keep_order:
-            f.unlink(missing_ok=True)
-            print(f"[cache] 清理旧档: {track_id} {kind} {qid}", flush=True)
+
+def _cleanup_lower_sync(track_id: str, kind: str, keep_quality_id: int) -> None:
+    """删除同类型更低档文件,档位顺序统一由 quality 模块提供。"""
+    keep_order = order_of(keep_quality_id, kind)
+    for path, quality_id in _cleanup_media_files(_track_dir(track_id), kind):
+        if order_of(quality_id, kind) < keep_order:
+            path.unlink(missing_ok=True)
+            print(f"[cache] 清理旧档: {track_id} {kind} {quality_id}", flush=True)
 
 
 def _cache_size_sync() -> int:
@@ -302,30 +292,15 @@ def _cleanup_all_sync() -> int:
     for track_dir in CACHE_DIR.iterdir():
         if not track_dir.is_dir():
             continue
-        for prefix, ext in (("q", ".m4a"), ("v", ".mp4")):
-            kind = "audio" if prefix == "q" else "video"
-            files = list(track_dir.glob(f"{prefix}*{ext}"))
+        for kind in ("audio", "video"):
+            files = _cleanup_media_files(track_dir, kind)
             if len(files) <= 1:
                 continue
-
-            def order_of(f, prefix=prefix, kind=kind):
-                try:
-                    qid = int(f.stem.removeprefix(prefix))
-                except ValueError:
-                    return -1
-                if kind == "audio":
-                    return (
-                        QUALITY_ORDER.index(qid)
-                        if qid in QUALITY_ORDER
-                        else len(QUALITY_ORDER)
-                    )
-                return qid
-
-            files.sort(key=order_of)
-            for f in files[:-1]:  # 只保留最高档
-                f.unlink(missing_ok=True)
+            files.sort(key=lambda item: order_of(item[1], kind))
+            for path, _ in files[:-1]:  # 只保留最高档
+                path.unlink(missing_ok=True)
                 removed += 1
-                print(f"[cache] 清理旧档: {track_dir.name} {kind} {f.stem}", flush=True)
+                print(f"[cache] 清理旧档: {track_dir.name} {kind} {path.stem}", flush=True)
     return removed
 
 
