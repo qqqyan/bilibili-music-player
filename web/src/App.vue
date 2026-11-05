@@ -19,6 +19,7 @@ import SettingsDialog from "./components/SettingsDialog.vue";
 import UserProfile from "./components/UserProfile.vue";
 import MatchDialog from "./components/MatchDialog.vue";
 import MatchPanel from "./components/MatchPanel.vue";
+import FeedbackDialog from "./components/FeedbackDialog.vue";
 
 const store = usePlayerStore();
 const audioEl = ref(null);
@@ -54,6 +55,8 @@ const showSettings = ref(false);
 const settingsTab = ref("settings");
 // 歌单匹配弹窗
 const showMatch = ref(false);
+// 应用内反馈弹窗(截图 + 脱敏日志 → GitHub issue)
+const showFeedback = ref(false);
 // 右侧栏:播放列表 / 匹配列表
 const rightTab = ref("playlist");
 
@@ -315,6 +318,13 @@ function onReplaceTrack(track) {
         >
           🎯
         </button>
+        <button
+          class="icon-btn"
+          title="反馈问题(截图 + 脱敏日志)"
+          @click="showFeedback = true"
+        >
+          🐞
+        </button>
       </div>
     </header>
 
@@ -456,6 +466,12 @@ function onReplaceTrack(track) {
       v-if="showMatch"
       @close="showMatch = false"
       @applied="store.loadPlaylist()"
+    />
+
+    <FeedbackDialog
+      v-if="showFeedback"
+      :logged-in="auth.logged_in"
+      @close="showFeedback = false"
     />
   </div>
 </template>
