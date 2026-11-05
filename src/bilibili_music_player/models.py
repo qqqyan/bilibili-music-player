@@ -41,6 +41,7 @@ class ResolvedTrack(TrackInfo):
 
     audio_streams: list[StreamInfo]  # 音频档位,按音质从低到高
     video_streams: list[StreamInfo] = []  # 视频档位,按画质从低到高(无画面时为空)
+    page_count: int = 1  # 视频分 P 总数(网易云/单 P 视频为 1)
 
 
 class SearchPage(BaseModel):

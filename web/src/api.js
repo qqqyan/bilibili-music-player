@@ -28,6 +28,11 @@ export function resolveTrack(id) {
   return request(`/api/resolve/${id}`);
 }
 
+/** bilibili 视频分 P 列表(id 可带 _p{n} 后缀,后端会取基础视频) */
+export function getVideoPages(id) {
+  return request(`/api/video/${id}/pages`);
+}
+
 /** 搜索 UP 主 */
 export function searchUsers(keyword, page = 1) {
   return request(`/api/users/search?keyword=${encodeURIComponent(keyword)}&page=${page}`);

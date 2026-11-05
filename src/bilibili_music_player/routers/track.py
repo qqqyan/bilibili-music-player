@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from ..repositories import cache_store, playlist_store
 from .. import quality
 from ..quality import pick_stream_by_quality
-from ..services.parse_service import resolve_track
+from ..services.parse_service import get_video_pages, resolve_track
 from ..services.download_manager import manager as download_manager
 from ..services.match_service import manager as match_manager
 from ..models import ResolvedTrack
@@ -21,11 +21,24 @@ async def api_resolve(
     track_id: str,
     page_index: int = Query(0, ge=0, description="视频分 P 序号,从 0 开始"),
 ):
-    """解析 bilibili 视频播放流(DASH 音视频流)。"""
+    """解析 bilibili 视频播放流(DASH 音视频流)。
+
+    track_id 可带 `_p{n}` 后缀指定分 P;显式 page_index 仅在无后缀时生效。
+    """
     try:
         return await resolve_track(track_id, page_index)
     except ValueError as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/video/{track_id}/pages")
+async def api_video_pages(track_id: str):
+    """视频分 P 列表(播放器分 P 选择器数据源)。"""
+    try:
+        pages = await get_video_pages(track_id)
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"pages": pages}
 
 
 def _merge_quality_list(local_quals: list[dict], remote_streams: list, kind: str) -> list[dict]:
@@ -160,6 +173,8 @@ async def api_track_plan(
             "cover": resolved.cover,
             "duration": resolved.duration,
             "source": resolved.source,
+            # 多 P 视频才需要前端再拉分 P 列表(单 P/网易云为 1)
+            "page_count": getattr(resolved, "page_count", 1),
         },
         "audio_streams": audio_streams,
         "video_streams": video_streams,

@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import re
 
 from bilibili_api import video
 from bilibili_api.video import (
@@ -81,23 +82,82 @@ def _stream_urls(*streams) -> list[str]:
                 urls.append(u)
     return urls
 
+# ---------------------------------------------------------------- 分 P ID
+
+# 多 P 视频的曲目 ID:基础 id 为 bv{BVxxx};非首个分 P 追加 _p{页码},
+# 如 bvBV1xx411c7mD_p2 表示第 2 P。BVID 不含下划线,后缀不会歧义。
+_PAGE_SUFFIX_RE = re.compile(r"^(?P<base>bv[A-Za-z0-9]+)_p(?P<page>\d+)$")
+
+
+def split_page_suffix(track_id: str) -> tuple[str, int | None]:
+    """拆分曲目 ID 的分 P 后缀 → (基础 ID, 0 起页码)。
+
+    没有后缀返回 (track_id, None);_p1 归一为 (基础 ID, 0)。
+    """
+    match = _PAGE_SUFFIX_RE.fullmatch(track_id or "")
+    if not match:
+        return track_id, None
+    return match.group("base"), max(0, int(match.group("page")) - 1)
+
+
+def page_track_id(base_id: str, page_index: int) -> str:
+    """基础 ID + 0 起页码 → 规范曲目 ID(第 1 P 不带后缀)。"""
+    return base_id if page_index <= 0 else f"{base_id}_p{page_index + 1}"
+
+
 # ---------------------------------------------------------------- 解析
 
-async def resolve_track(track_id: str, page_index: int = 0) -> ResolvedTrack:
+async def resolve_track(
+    track_id: str, page_index: int | None = None
+) -> ResolvedTrack:
     """解析播放流:bvBVxxx(bilibili 视频) / ne{song_id}(网易云歌曲)。
 
+    bilibili 多 P 视频由 track_id 的 `_p{n}` 后缀指定分 P(第 1 P 无后缀);
+    显式传入的 page_index 仅在没有后缀时生效,便于旧接口保持兼容。
     经信号量限频:并发解析不超过 2 个,超出排队(防批量操作触发风控)。
     非 ValueError 的异常(API 错误/下架等)归一为 ValueError,路由层统一 502。
     """
     async with _RESOLVE_SEMAPHORE:
         if track_id.startswith("ne"):
             return await _resolve_netease(int(track_id[2:]))
+        base_id, suffix_page = split_page_suffix(track_id)
+        page = suffix_page if suffix_page is not None else (page_index or 0)
         try:
-            return await _resolve_video(track_id.removeprefix("bv"), page_index)
+            return await _resolve_video(
+                base_id.removeprefix("bv"), page, page_track_id(base_id, page)
+            )
         except ValueError:
             raise
         except Exception as e:  # ApiException / ResponseCodeException 等
             raise ValueError(f"解析失败: {str(e)[:120]}") from e
+
+
+async def get_video_pages(track_id: str) -> list[dict]:
+    """获取视频分 P 列表(多 P 选择器数据源)。
+
+    返回 [{index, page, title, duration, cover}],index 为 0 起序号。
+    与播放流解析共用信号量,避免批量请求触发风控。
+    """
+    base_id, _ = split_page_suffix(track_id)
+    if not base_id.startswith("bv"):
+        raise ValueError("仅 bilibili 视频支持分 P")
+    bvid = base_id.removeprefix("bv")
+    async with _RESOLVE_SEMAPHORE:
+        try:
+            v = video.Video(bvid=bvid, credential=get_credential())
+            pages = await v.get_pages()
+        except Exception as e:  # ApiException / ResponseCodeException 等
+            raise ValueError(f"获取分 P 失败: {str(e)[:120]}") from e
+    return [
+        {
+            "index": i,
+            "page": p.get("page") or i + 1,
+            "title": p.get("part") or "",
+            "duration": parse_duration(p.get("duration")),
+            "cover": abs_url(p.get("first_frame") or ""),
+        }
+        for i, p in enumerate(pages or [])
+    ]
 
 
 async def _resolve_netease(song_id: int) -> ResolvedTrack:
@@ -167,7 +227,9 @@ async def _resolve_netease(song_id: int) -> ResolvedTrack:
         video_streams=[],
     )
 
-async def _resolve_video(bvid: str, page_index: int) -> ResolvedTrack:
+async def _resolve_video(
+    bvid: str, page_index: int, track_id: str | None = None
+) -> ResolvedTrack:
     """视频:解析 DASH 音视频流,提供多音质档 + MV 画面。"""
     cred = get_credential()
     v = video.Video(bvid=bvid, credential=cred)
@@ -188,7 +250,7 @@ async def _resolve_video(bvid: str, page_index: int) -> ResolvedTrack:
             stream = _make_stream_info(
                 0, "标准", "video/mp4", 0, _stream_urls(streams[0])
             )
-            track = _build_video_track(data, page, bvid)
+            track = _build_video_track(data, page, bvid, track_id)
             track.audio_streams = [stream]
             track.video_streams = [stream]  # 同一文件即音画
             return track
@@ -201,7 +263,7 @@ async def _resolve_video(bvid: str, page_index: int) -> ResolvedTrack:
                 stream = _make_stream_info(
                     0, "标准", "video/mp4", 0, _stream_urls(html5_streams[0])
                 )
-                track = _build_video_track(data, page, bvid)
+                track = _build_video_track(data, page, bvid, track_id)
                 track.audio_streams = [stream]
                 track.video_streams = [stream]
                 return track
@@ -225,7 +287,7 @@ async def _resolve_video(bvid: str, page_index: int) -> ResolvedTrack:
         key=lambda s: AUDIO_QUALITY_ORDER.index(s.audio_quality)
         if s.audio_quality in AUDIO_QUALITY_ORDER else 0
     )
-    track = _build_video_track(data, page, bvid)
+    track = _build_video_track(data, page, bvid, track_id)
     track.audio_streams = [
         _make_stream_info(
             quality_id=s.audio_quality.value,
@@ -248,17 +310,20 @@ async def _resolve_video(bvid: str, page_index: int) -> ResolvedTrack:
     ]
     return track
 
-def _build_video_track(data: dict, page: dict, bvid: str) -> ResolvedTrack:
+def _build_video_track(
+    data: dict, page: dict, bvid: str, track_id: str | None = None
+) -> ResolvedTrack:
     """从视频信息构造元数据(标题取分 P 标题)。"""
     title = page.get("part") or data.get("title") or ""
     if len(data.get("pages") or []) > 1 and page.get("part"):
         title = f"{data.get('title', '')} - {page['part']}"
     return ResolvedTrack(
-        id=f"bv{bvid}",
+        id=track_id or f"bv{bvid}",
         title=title,
         artist=first(data.get("owner") or {}, "name", "uname"),
         cover=abs_url(page.get("first_frame") or data.get("pic") or ""),
         duration=parse_duration(page.get("duration") or data.get("duration")),
         source="bilibili 视频",
         audio_streams=[],
+        page_count=len(data.get("pages") or []) or 1,
     )
