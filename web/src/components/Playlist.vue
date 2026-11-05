@@ -3,9 +3,13 @@ import { computed, nextTick, ref, watch } from "vue";
 import { usePlayerStore } from "../stores/player";
 import { formatTime } from "../api";
 import DownloadDialog from "./DownloadDialog.vue";
+import ImportDialog from "./ImportDialog.vue";
 
 const store = usePlayerStore();
+const emit = defineEmits(["open-login"]);
 const showDownloadDialog = ref(false);
+const showImportDialog = ref(false);
+const importTab = ref("favorites");
 
 // 切歌时把当前曲目滚动到可视区域(删除歌曲导致的索引变化不滚动)
 const listEl = ref(null);
@@ -67,6 +71,17 @@ function onMenuPlayAll() {
 function onMenuDownload() {
   showMenu.value = false;
   showDownloadDialog.value = true;
+}
+
+function onMenuImport(tab) {
+  showMenu.value = false;
+  importTab.value = tab;
+  showImportDialog.value = true;
+}
+
+function onImportOpenLogin() {
+  showImportDialog.value = false;
+  emit("open-login");
 }
 
 // 点击菜单外关闭
@@ -147,7 +162,7 @@ async function onDownloadConfirm({ audio, video }) {
         type="text"
         placeholder="搜索歌曲 / UP 主"
       />
-      <div v-if="store.playlist.length" class="head-actions">
+      <div class="head-actions">
         <button
           class="head-btn menu-btn"
           :class="{ on: showMenu }"
@@ -158,15 +173,23 @@ async function onDownloadConfirm({ audio, video }) {
         </button>
         <Transition name="menu-drop">
           <div v-if="showMenu" class="menu" @click.stop>
-            <button class="menu-item" @click="onMenuPlayAll">▶ 播放全部</button>
-            <button class="menu-item" @click="onMenuDownload">↓ 下载全部</button>
-            <button
-              class="menu-item danger"
-              :class="{ armed: confirmClear }"
-              @click="onClearClick"
-            >
-              {{ confirmClear ? "确认清空?" : "✕ 清空播放列表" }}
+            <button class="menu-item" @click="onMenuImport('favorites')">
+              ⇪ 导入 B站收藏夹
             </button>
+            <button class="menu-item" @click="onMenuImport('audiolist')">
+              ♫ 导入 B站音频歌单
+            </button>
+            <template v-if="store.playlist.length">
+              <button class="menu-item" @click="onMenuPlayAll">▶ 播放全部</button>
+              <button class="menu-item" @click="onMenuDownload">↓ 下载全部</button>
+              <button
+                class="menu-item danger"
+                :class="{ armed: confirmClear }"
+                @click="onClearClick"
+              >
+                {{ confirmClear ? "确认清空?" : "✕ 清空播放列表" }}
+              </button>
+            </template>
           </div>
         </Transition>
       </div>
@@ -175,7 +198,7 @@ async function onDownloadConfirm({ audio, video }) {
     <div v-if="!store.playlist.length" class="empty">
       还没有歌曲
       <br />
-      搜索并点击「+」加入列表
+      搜索并点击「+」加入列表,或点右上角 ⋯ 导入收藏夹 / B站歌单
     </div>
 
     <div v-else ref="listEl" class="list">
@@ -252,6 +275,14 @@ async function onDownloadConfirm({ audio, video }) {
       v-if="showDownloadDialog"
       @close="showDownloadDialog = false"
       @confirm="onDownloadConfirm"
+    />
+
+    <ImportDialog
+      v-if="showImportDialog"
+      :initial-tab="importTab"
+      @close="showImportDialog = false"
+      @open-login="onImportOpenLogin"
+      @imported="store.refreshCacheStatus()"
     />
 
     <!-- 行悬停/固定详情(完整信息 + 替换歌曲) -->

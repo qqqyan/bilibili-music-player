@@ -36,6 +36,9 @@ function onQualityChange(e) {
 function onVideoQualityChange(e) {
   store.setVideoQuality(Number(e.target.value));
 }
+function onPageChange(e) {
+  store.switchPage(Number(e.target.value));
+}
 </script>
 
 <template>
@@ -100,6 +103,21 @@ function onVideoQualityChange(e) {
             :value="i"
           >
             {{ s.quality }}{{ s.local ? "·本地" : "" }}
+          </option>
+        </select>
+        <select
+          v-if="store.videoPages.length > 1"
+          class="quality page-select"
+          :value="store.currentPageIndex"
+          :title="`分 P 选择(共 ${store.videoPages.length} P)`"
+          @change="onPageChange"
+        >
+          <option
+            v-for="(p, i) in store.videoPages"
+            :key="p.page || i"
+            :value="i"
+          >
+            P{{ p.page || i + 1 }} {{ p.title }}
           </option>
         </select>
         <select
@@ -250,6 +268,10 @@ function onVideoQualityChange(e) {
   background: var(--panel-2);
   font-size: 12px;
   outline: none;
+}
+.page-select {
+  max-width: 170px;
+  text-overflow: ellipsis;
 }
 
 .progress-row {

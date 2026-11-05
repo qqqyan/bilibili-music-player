@@ -28,6 +28,11 @@ export function resolveTrack(id) {
   return request(`/api/resolve/${id}`);
 }
 
+/** bilibili 视频分 P 列表(id 可带 _p{n} 后缀,后端会取基础视频) */
+export function getVideoPages(id) {
+  return request(`/api/video/${id}/pages`);
+}
+
 /** 搜索 UP 主 */
 export function searchUsers(keyword, page = 1) {
   return request(`/api/users/search?keyword=${encodeURIComponent(keyword)}&page=${page}`);
@@ -350,4 +355,21 @@ export function searchNeteaseArtists(keyword) {
 /** 网易云歌手主页:信息 + 热门歌曲 */
 export function getNeteaseArtist(mid) {
   return request(`/api/netease/artist/${mid}`);
+}
+
+// ---------------------------------------------------------------- B站导入
+
+/** 收藏夹列表(不传 mid = 当前登录账号;未登录返回 logged_in=false) */
+export function getFavoriteFolders(mid = null) {
+  return request(`/api/favorites/folders${mid ? `?mid=${mid}` : ""}`);
+}
+
+/** 收藏夹内容(公开收藏夹无需登录) */
+export function getFavoriteItems(mediaId, page = 1) {
+  return request(`/api/favorites/${mediaId}/items?page=${page}`);
+}
+
+/** B站音频歌单信息 + 单页歌曲 */
+export function getAudioList(amId, page = 1) {
+  return request(`/api/audiolist/${amId}?page=${page}`);
 }

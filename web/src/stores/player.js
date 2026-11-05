@@ -6,6 +6,7 @@ import {
   getAllCache,
   getPlaylist,
   getSettings,
+  getVideoPages,
   playUrl,
   queueCache,
   savePlaylist,
@@ -60,6 +61,8 @@ export const usePlayerStore = defineStore("player", {
         search_personalized: true, // 搜索带登录凭证(个性化排序,与官网一致)
       },
       externalTrack: null, // 临时播放(未入列表)的曲目,currentTrack 回退用
+      videoPages: [], // 当前视频的分 P 列表(仅多 P 视频有值)
+      pageCache: {}, // 基础 bvid -> 分 P 列表(本次会话内复用,避免反复请求)
       mvEnabled: false,
       mvReady: false,
       _tearingDown: false,
@@ -93,6 +96,12 @@ export const usePlayerStore = defineStore("player", {
       return s.resolved.audio_streams[idx];
     },
     currentQualityLabel: (s) => s.resolved?.audio_streams[Math.min(s.qualityIndex >= 0 ? s.qualityIndex : s.resolved.audio_streams.length - 1, s.resolved.audio_streams.length - 1)]?.quality ?? "",
+    /** 当前曲目的 0 起分 P 序号(无 _p 后缀 = 第 1 P) */
+    currentPageIndex() {
+      const id = this.currentTrack?.id || "";
+      const match = /_p(\d+)$/.exec(id);
+      return match ? Math.max(0, Number(match[1]) - 1) : 0;
+    },
     /** 当前应播放的视频画面流(按期望画质) */
     currentVideoStream: (s) => {
       const streams = s.resolved?.video_streams || [];
@@ -281,6 +290,22 @@ export const usePlayerStore = defineStore("player", {
       return true;
     },
 
+    /** 批量加入(收藏夹/歌单导入):去重后一次性落盘,避免逐首写文件 */
+    addTracks(tracks) {
+      const existing = new Set(this.playlist.map((t) => t.id));
+      let added = 0;
+      for (const track of tracks || []) {
+        if (!track?.id || existing.has(track.id)) continue;
+        this.playlist.push(track);
+        existing.add(track.id);
+        added += 1;
+      }
+      if (!added) return 0;
+      this._savePlaylist();
+      if (this.mode === "shuffle") this._buildShuffleQueue();
+      return added;
+    },
+
     /** 播放全部:随机模式随机起点(有期待感),其余模式从第一首开始 */
     async playAll() {
       if (!this.playlist.length) return;
@@ -424,6 +449,8 @@ export const usePlayerStore = defineStore("player", {
       this.error = "";
       this._loading = true;
       if (!track.id.startsWith("match:")) this._consecutiveMatchFailures = 0;
+      // 分 P 列表:切换曲目时先复用本次会话缓存,缺失再异步拉取
+      this.videoPages = this.pageCache[track.id.replace(/_p\d+$/, "")] || [];
       try {
         // 后端决策:plan 接口一次给出档位列表 + 播放来源 + 补缓存决策,
         // 前端无需感知本地/在线;占位曲目(match:)由后端即时匹配
@@ -431,16 +458,20 @@ export const usePlayerStore = defineStore("player", {
           audioQuality: this.qualityId,
           videoQuality: this.videoQualityId,
         });
-        // 占位曲目匹配成功:条目就地升级为真实 bvid(须先于下方所有 track.id
-        // 使用点;orig_name/orig_artists 原样保留,供「替换歌曲」使用)
-        if (plan.match_chosen && track.id.startsWith("match:")) {
-          track.id = plan.track.id;
-          track.title = plan.track.title;
-          track.artist = plan.track.artist;
-          track.cover = plan.track.cover;
-          track.duration = plan.track.duration;
-          track.source = plan.track.source;
-          this._savePlaylist();
+        // 解析结果即权威元数据:占位曲目升级为真实 bvid、多 P 切 P 后同步
+        // 标题/时长/封面,同时把 _p1 之类非规范后缀归一(第 1 P 不带后缀)
+        track.id = plan.track.id;
+        track.title = plan.track.title || track.title;
+        track.artist = plan.track.artist || track.artist;
+        track.cover = plan.track.cover || track.cover;
+        track.duration = plan.track.duration || track.duration;
+        track.source = plan.track.source || track.source;
+        if (index >= 0 && this.playlist[index] === track) this._savePlaylist();
+        // 仅多 P 视频拉取分 P 列表(单 P/网易云不额外请求)
+        if ((plan.track.page_count || 1) > 1) {
+          this._loadVideoPages(track);
+        } else {
+          this.videoPages = [];
         }
         // 补缓存决策:拿到即执行,不随「切歌丢弃」一起丢
         // (快速连点多首时,每一首的下载任务都必须入队)
@@ -492,6 +523,55 @@ export const usePlayerStore = defineStore("player", {
       } finally {
         this._loading = false;
       }
+    },
+
+    /** 拉取当前视频的分 P 列表(仅 bilibili 视频;本次会话按 bvid 缓存) */
+    async _loadVideoPages(track) {
+      const baseId = (track?.id || "").replace(/_p\d+$/, "");
+      if (!baseId.startsWith("bv")) {
+        this.videoPages = [];
+        return;
+      }
+      if (this.pageCache[baseId]) {
+        this.videoPages = this.pageCache[baseId];
+        return;
+      }
+      try {
+        const data = await getVideoPages(baseId);
+        const pages = data.pages || [];
+        this.pageCache[baseId] = pages;
+        if ((this.currentTrack?.id || "").replace(/_p\d+$/, "") === baseId) {
+          this.videoPages = pages;
+        }
+      } catch {
+        // 分 P 信息失败不影响播放,只是不显示选择器
+        if ((this.currentTrack?.id || "").replace(/_p\d+$/, "") === baseId) {
+          this.videoPages = [];
+        }
+      }
+    },
+
+    /** 切换分 P:就地改写当前播放列表条目(第 1 P 恢复无后缀 ID),
+     *  目标 P 已在列表其它位置时直接播放该条目。切换后从头播放。 */
+    async switchPage(pageIndex) {
+      const track = this.currentTrack;
+      if (!track || !this.videoPages.length) return;
+      const page = this.videoPages[pageIndex];
+      if (!page) return;
+      const baseId = track.id.replace(/_p\d+$/, "");
+      if (!baseId.startsWith("bv")) return;
+      const newId = pageIndex <= 0 ? baseId : `${baseId}_p${pageIndex + 1}`;
+      if (newId === track.id) return;
+      const dupIndex = this.playlist.findIndex(
+        (t, i) => t.id === newId && i !== this.currentIndex
+      );
+      if (dupIndex >= 0) {
+        await this.playTrack(dupIndex);
+        return;
+      }
+      track.id = newId;
+      if (this.currentIndex < 0) this.externalTrack = track;
+      await this._playTrackObject(track, this.currentIndex);
     },
 
     /** 把期望音质(qualityId)映射为当前 resolved 的档位索引 */
