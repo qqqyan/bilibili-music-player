@@ -351,3 +351,25 @@ export function searchNeteaseArtists(keyword) {
 export function getNeteaseArtist(mid) {
   return request(`/api/netease/artist/${mid}`);
 }
+
+// ---------------------------------------------------------------- 应用内反馈
+
+/** 反馈目标仓库与后端可用日志量 */
+export function feedbackInfo() {
+  return request("/api/feedback/info");
+}
+
+/** 最近后端日志(已脱敏,预览用) */
+export function feedbackLogs(limit = 200) {
+  return request(`/api/feedback/logs?limit=${limit}`);
+}
+
+/** 只生成 GitHub issue 正文/预填链接,不落盘 */
+export function previewFeedback(payload) {
+  return postJson("/api/feedback/preview", payload);
+}
+
+/** 生成预填链接并保存本地诊断包(截图/完整日志/报告) */
+export function submitFeedback(payload) {
+  return postJson("/api/feedback/report", payload);
+}

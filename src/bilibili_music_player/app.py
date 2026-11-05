@@ -19,12 +19,15 @@ from fastapi.staticfiles import StaticFiles
 from .config import configure_client, is_logged_in
 from .repositories.cache_store import InvalidCachePath
 from .services.download_manager import manager as download_manager
+from .services.feedback_service import install_log_capture
 from .services.match_service import manager as match_manager
-from .routers import auth, cache, match, netease, playlist, search, settings, track, user
+from .routers import auth, cache, feedback, match, netease, playlist, search, settings, track, user
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # 先接管 stdout/stderr 与 logging:启动阶段的日志也能进入反馈诊断包
+    install_log_capture()
     # 事件循环内初始化 zoku 客户端:开启 curl_cffi 浏览器伪装
     configure_client()
     # 预热 zoku 全局状态(wbi mixin key / buvid 等):它们「首次用到才获取」
@@ -71,6 +74,7 @@ app.include_router(cache.router)
 app.include_router(playlist.router)
 app.include_router(settings.router)
 app.include_router(auth.router)
+app.include_router(feedback.router)
 
 
 @app.get("/api/health")
