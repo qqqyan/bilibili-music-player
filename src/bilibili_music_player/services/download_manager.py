@@ -74,6 +74,8 @@ class DownloadManager:
         按期望档(不存在则降级)只补下缺失的档。
         """
         for tid in track_ids:
+            cache_store.validate_track_id(tid)
+        for tid in track_ids:
             # 点播优先:已入队(检查中/待下载/失败)的曲目也要提队首
             if priority and self._try_prioritize(tid):
                 continue

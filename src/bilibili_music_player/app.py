@@ -13,9 +13,11 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import configure_client, is_logged_in
+from .repositories.cache_store import InvalidCachePath
 from .services.download_manager import manager as download_manager
 from .services.match_service import manager as match_manager
 from .routers import auth, cache, match, netease, playlist, search, settings, track, user
@@ -46,6 +48,11 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="bilibili-music-player", version="0.1.0", lifespan=lifespan)
+
+@app.exception_handler(InvalidCachePath)
+async def invalid_cache_path_handler(request, exc):
+    return JSONResponse(status_code=400, content={"detail": "非法缓存路径"})
+
 
 app.add_middleware(
     CORSMiddleware,

@@ -8,8 +8,9 @@
 
 import asyncio
 import json
+import re
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from ..config import PROJECT_ROOT
 
@@ -22,13 +23,43 @@ from ..quality import (  # noqa: E402
     quality_label,
     video_quality_label,
 )
+
+
+class InvalidCachePath(Exception):
+    """不可信的缓存 ID / 路径;由 HTTP 层转换为 400。"""
+
+
+def _safe_child(parent: Path, name: str) -> Path:
+    # 同时拒绝 POSIX / Windows 路径语义,不能依赖运行平台的 basename。
+    if (
+        not isinstance(name, str)
+        or not re.fullmatch(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*", name)
+        or PureWindowsPath(name).is_reserved()
+    ):
+        raise InvalidCachePath("非法缓存路径")
+    path = parent / name
+    # 不跟随已有符号链接(含悬空链接)或指向其它目录的 junction。
+    try:
+        unsafe = path.is_symlink() or path.resolve().parent != parent.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise InvalidCachePath("非法缓存路径") from exc
+    if unsafe:
+        raise InvalidCachePath("非法缓存路径")
+    return path
+
+
 def _track_dir(track_id: str) -> Path:
-    # track_id 形如 bvBVxxx / au123,直接作目录名安全
-    return CACHE_DIR / track_id
+    # track_id 必须是单个目录名;bvBVxxx / au123 / ne123 均兼容。
+    return _safe_child(CACHE_DIR, track_id)
+
+
+def validate_track_id(track_id: str) -> None:
+    """在批量入队等有副作用的操作前验证缓存边界。"""
+    _track_dir(track_id)
 
 
 def _meta_path(track_id: str) -> Path:
-    return _track_dir(track_id) / "meta.json"
+    return _safe_child(_track_dir(track_id), "meta.json")
 
 
 def _read_meta(track_id: str) -> dict | None:
@@ -57,8 +88,8 @@ def _audio_ext(track_id: str, quality_id: int) -> str:
 
 def _file_path(track_id: str, quality_id: int, kind: str = "audio") -> Path:
     if kind == "video":
-        return _track_dir(track_id) / f"v{quality_id}.mp4"
-    return _track_dir(track_id) / f"q{quality_id}{_audio_ext(track_id, quality_id)}"
+        return _safe_child(_track_dir(track_id), f"v{quality_id}.mp4")
+    return _safe_child(_track_dir(track_id), f"q{quality_id}{_audio_ext(track_id, quality_id)}")
 
 
 def _scan_local_media(track_id: str, kind: str) -> list[dict]:
@@ -71,7 +102,12 @@ def _scan_local_media(track_id: str, kind: str) -> list[dict]:
     exts = [".mp4"] if kind == "video" else [".m4a", ".mp3", ".flac"]
     result = []
     for f in sorted(dir_path.glob(f"{prefix}*")):
-        if f.suffix not in exts or not f.stem.removeprefix(prefix).isdigit():
+        if (
+            f.is_symlink()
+            or not f.is_file()
+            or f.suffix not in exts
+            or not f.stem.removeprefix(prefix).isdigit()
+        ):
             continue
         quality_id = int(f.stem.removeprefix(prefix))
         label = (
@@ -201,7 +237,10 @@ def _scan_all_sync() -> dict[str, list[dict]]:
         return result
     for meta_file in CACHE_DIR.glob("*/meta.json"):
         track_id = meta_file.parent.name
-        quals = _scan_local_qualities(track_id)
+        try:
+            quals = _scan_local_qualities(track_id)
+        except InvalidCachePath:
+            continue
         if quals:
             result[track_id] = quals
     return result
@@ -234,7 +273,7 @@ async def open_local_file(track_id: str, quality_id: int, kind: str = "audio") -
                 ).get(str(quality_id)) or {}
                 name = record.get("file")
                 if name:
-                    p = _track_dir(track_id) / name
+                    p = _safe_child(_track_dir(track_id), name)
                     if p.exists():
                         return p
             p = _file_path(track_id, quality_id, kind)
@@ -277,7 +316,7 @@ async def get_local_mime(track_id: str, quality_id: int, kind: str = "audio") ->
                     return record["mime"]
                 name = record.get("file")
                 if name:
-                    return _mime_from_suffix(_track_dir(track_id) / name, kind)
+                    return _mime_from_suffix(_safe_child(_track_dir(track_id), name), kind)
             return _mime_from_suffix(_file_path(track_id, quality_id, kind), kind)
 
         return await asyncio.to_thread(_find)
@@ -294,13 +333,20 @@ async def cleanup_lower(track_id: str, kind: str, keep_quality_id: int) -> None:
         await asyncio.to_thread(_cleanup_lower_sync, track_id, kind, keep_quality_id)
 
 
+def _is_safe_track_dir(path: Path) -> bool:
+    try:
+        return _track_dir(path.name).is_dir()
+    except InvalidCachePath:
+        return False
+
+
 def _cleanup_all_sync() -> int:
     """遍历全部缓存,每首曲目音频/视频各只保留最高档。返回删除文件数。"""
     removed = 0
     if not CACHE_DIR.exists():
         return 0
     for track_dir in CACHE_DIR.iterdir():
-        if not track_dir.is_dir():
+        if not _is_safe_track_dir(track_dir):
             continue
         for prefix, ext in (("q", ".m4a"), ("v", ".mp4")):
             kind = "audio" if prefix == "q" else "video"
@@ -352,6 +398,7 @@ async def cache_size() -> int:
 
 def tmp_path(track_id: str, quality_id: int, kind: str = "audio") -> Path:
     """下载中的临时文件路径(下载完成后再改名入库)。kind: audio / video。"""
-    return _file_path(track_id, quality_id, kind).with_suffix(
+    path = _file_path(track_id, quality_id, kind).with_suffix(
         ".m4a.part" if kind == "audio" else ".mp4.part"
     )
+    return _safe_child(path.parent, path.name)
