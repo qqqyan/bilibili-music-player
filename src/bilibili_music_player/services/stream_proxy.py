@@ -46,12 +46,13 @@ def register_stream(
     mime 非空时转发生效时覆盖上游 content-type。
     """
     token = uuid.uuid4().hex
-    # headers 缺省走 StreamEntry 默认(bilibili UA/Referer);显式传入才覆盖
-    _STREAMS[token] = (
-        StreamEntry(urls=urls)
-        if not headers and not mime
-        else StreamEntry(urls=urls, headers=headers or {}, mime=mime)
-    )
+    # headers 缺省走 StreamEntry 默认(bilibili UA/Referer);显式传入才覆盖。
+    # 注意:只设置 mime 时也必须保留默认请求头(否则 B站 CDN 403)。
+    entry = StreamEntry(urls=urls)
+    if headers:
+        entry.headers = headers
+    entry.mime = mime
+    _STREAMS[token] = entry
     return token
 
 

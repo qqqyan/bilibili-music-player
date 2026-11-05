@@ -427,7 +427,10 @@ function onReplaceTrack(track) {
             匹配列表
           </button>
         </div>
-        <Playlist v-show="rightTab === 'playlist'" />
+        <Playlist
+          v-show="rightTab === 'playlist'"
+          @open-login="openSettings('account')"
+        />
         <MatchPanel
           v-show="rightTab === 'match'"
           @applied="store.loadPlaylist()"

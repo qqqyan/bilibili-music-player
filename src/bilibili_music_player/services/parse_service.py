@@ -6,7 +6,7 @@
 import asyncio
 import re
 
-from bilibili_api import video
+from bilibili_api import audio, video
 from bilibili_api.video import (
     AudioQuality,
     AudioStreamDownloadURL,
@@ -110,7 +110,7 @@ def page_track_id(base_id: str, page_index: int) -> str:
 async def resolve_track(
     track_id: str, page_index: int | None = None
 ) -> ResolvedTrack:
-    """解析播放流:bvBVxxx(bilibili 视频) / ne{song_id}(网易云歌曲)。
+    """解析播放流:bvBVxxx(bilibili 视频) / au{id}(B站音频) / ne{song_id}(网易云歌曲)。
 
     bilibili 多 P 视频由 track_id 的 `_p{n}` 后缀指定分 P(第 1 P 无后缀);
     显式传入的 page_index 仅在没有后缀时生效,便于旧接口保持兼容。
@@ -120,6 +120,13 @@ async def resolve_track(
     async with _RESOLVE_SEMAPHORE:
         if track_id.startswith("ne"):
             return await _resolve_netease(int(track_id[2:]))
+        if track_id.startswith("au"):
+            try:
+                return await _resolve_audio(int(track_id[2:]))
+            except ValueError:
+                raise
+            except Exception as e:  # ApiException / ResponseCodeException 等
+                raise ValueError(f"解析失败: {str(e)[:120]}") from e
         base_id, suffix_page = split_page_suffix(track_id)
         page = suffix_page if suffix_page is not None else (page_index or 0)
         try:
@@ -158,6 +165,39 @@ async def get_video_pages(track_id: str) -> list[dict]:
         }
         for i, p in enumerate(pages or [])
     ]
+
+
+async def _resolve_audio(auid: int) -> ResolvedTrack:
+    """B站音频(au):元数据 + 播放地址。
+
+    B站音频是单文件音轨,无画面;返回单一「标准」档。
+    """
+    a = audio.Audio(auid, credential=get_credential())
+    info, url_data = await asyncio.gather(a.get_info(), a.get_download_url())
+    info = info or {}
+    urls = (url_data or {}).get("cdns") or []
+    if not urls:
+        raise ValueError("未获取到音频地址(可能无版权或需登录)")
+    mime = "audio/mp4" if any(".m4a" in url.lower() for url in urls) else "audio/mpeg"
+    token = register_stream(urls, mime=mime)
+    stream = StreamInfo(
+        quality_id=0,
+        quality="标准",
+        mime=mime,
+        bandwidth=0,
+        stream_url=stream_token_url(token),
+    )
+    return ResolvedTrack(
+        id=f"au{auid}",
+        title=info.get("title") or f"B站音频 {auid}",
+        artist=info.get("author") or info.get("uname") or "未知歌手",
+        mid=int(info.get("uid") or 0),
+        cover=abs_url(info.get("cover") or ""),
+        duration=int(info.get("duration") or 0),
+        source="bilibili 音频",
+        audio_streams=[stream],
+        video_streams=[],
+    )
 
 
 async def _resolve_netease(song_id: int) -> ResolvedTrack:

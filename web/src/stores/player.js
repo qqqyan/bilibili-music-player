@@ -290,6 +290,22 @@ export const usePlayerStore = defineStore("player", {
       return true;
     },
 
+    /** 批量加入(收藏夹/歌单导入):去重后一次性落盘,避免逐首写文件 */
+    addTracks(tracks) {
+      const existing = new Set(this.playlist.map((t) => t.id));
+      let added = 0;
+      for (const track of tracks || []) {
+        if (!track?.id || existing.has(track.id)) continue;
+        this.playlist.push(track);
+        existing.add(track.id);
+        added += 1;
+      }
+      if (!added) return 0;
+      this._savePlaylist();
+      if (this.mode === "shuffle") this._buildShuffleQueue();
+      return added;
+    },
+
     /** 播放全部:随机模式随机起点(有期待感),其余模式从第一首开始 */
     async playAll() {
       if (!this.playlist.length) return;

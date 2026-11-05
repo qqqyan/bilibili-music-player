@@ -356,3 +356,20 @@ export function searchNeteaseArtists(keyword) {
 export function getNeteaseArtist(mid) {
   return request(`/api/netease/artist/${mid}`);
 }
+
+// ---------------------------------------------------------------- B站导入
+
+/** 收藏夹列表(不传 mid = 当前登录账号;未登录返回 logged_in=false) */
+export function getFavoriteFolders(mid = null) {
+  return request(`/api/favorites/folders${mid ? `?mid=${mid}` : ""}`);
+}
+
+/** 收藏夹内容(公开收藏夹无需登录) */
+export function getFavoriteItems(mediaId, page = 1) {
+  return request(`/api/favorites/${mediaId}/items?page=${page}`);
+}
+
+/** B站音频歌单信息 + 单页歌曲 */
+export function getAudioList(amId, page = 1) {
+  return request(`/api/audiolist/${amId}?page=${page}`);
+}
