@@ -54,6 +54,7 @@ export const usePlayerStore = defineStore("player", {
         cleanup_old_quality: false,
         auto_add_on_play: true, // 从搜索结果点播时自动加入播放列表
         auto_cache_on_play: true, // 播放时自动缓存(仅列表内曲目)
+        auto_download_on_add: true, // 加入播放列表时立即下载(长视频除外)
         artist_map: [], // 歌手映射表(设置弹窗「歌手映射」Tab 编辑)
         match_auto_add: false, // 导入匹配歌单后立即以占位曲目加入播放列表
         new_track_next_on_shuffle: false, // 随机模式下新加入歌曲默认下一首播放
@@ -190,7 +191,7 @@ export const usePlayerStore = defineStore("player", {
         this.playlist = loadJson(LS_KEY, []);
         this.error = "无法连接后端,已加载本地缓存的歌单";
       }
-      // 策略 A:启动时不自动下载,播放过才下载;「下载全部」按钮手动触发
+      // 启动时不自动下载已有列表(加入列表/播放时按设置自动下载,「下载全部」手动触发)
       await this.refreshCacheStatus();
     },
 
@@ -269,7 +270,8 @@ export const usePlayerStore = defineStore("player", {
       if (this.playlist.some((t) => t.id === track.id)) return false; // 已存在
       this.playlist.push(track);
       this._savePlaylist();
-      // 策略 A:不自动下载,播放过才会下载(见 playTrack)
+      // 设置开启时:加入列表即后台下载,避免首次播放「边播边下」造成首音延迟
+      this._autoDownloadOnAdd(track);
       if (this.mode === "shuffle") {
         this._buildShuffleQueue(); // 队列索引同步
         // 设置开启时:随机模式下新加入的歌默认下一首播放
@@ -548,6 +550,17 @@ export const usePlayerStore = defineStore("player", {
     async _playExternal(track) {
       this.externalTrack = track;
       await this._playTrackObject(track, -1);
+    },
+
+    /** 加入播放列表时自动下载(设置 auto_download_on_add)。
+     *  跳过占位曲目(尚无真实源)、长视频(只允许手动下载)与已缓存曲目;
+     *  其余交由后端检查补下,已有档位不会重复下载。 */
+    _autoDownloadOnAdd(track) {
+      if (this.settings.auto_download_on_add === false) return;
+      if (!track?.id || track.id.startsWith("match:")) return;
+      if ((track.duration || 0) > 600) return;
+      if (this.cacheStatus[track.id]?.state === "done") return; // 已下载
+      this._queueCache([track.id]);
     },
 
     /** 是否允许播放触发的自动缓存:开关开启且曲目在播放列表内

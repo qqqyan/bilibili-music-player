@@ -14,6 +14,8 @@ DEFAULTS: dict = {
     "auto_add_on_play": True,
     # 播放时自动缓存到本地(仅列表内曲目;临时播放联动不缓存)
     "auto_cache_on_play": True,
+    # 加入播放列表时立即后台下载未缓存曲目(长视频仍只允许手动下载)
+    "auto_download_on_add": True,
     # 歌手映射表:[{singer: 主键, netease: [名..], bilibili: [名..]}]
     # 平台名即字段,可多个;影响歌单匹配的搜索词生成与候选评分
     "artist_map": [],
