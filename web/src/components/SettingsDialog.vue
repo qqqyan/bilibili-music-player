@@ -6,7 +6,8 @@ import NeteaseLogin from "./NeteaseLogin.vue";
 
 const props = defineProps({
   initialTab: { type: String, default: "settings" }, // account / settings
-  loggedIn: { type: Boolean, default: false }, // 登录态,控制退出按钮显示
+  loggedIn: { type: Boolean, default: false }, // 登录态,控制登录/账号信息显示
+  user: { type: Object, default: null }, // 当前 bilibili 账号(name / face)
 });
 const emit = defineEmits(["close", "login-success", "logout"]);
 
@@ -116,10 +117,22 @@ async function saveAliases() {
         </button>
       </div>
 
-      <!-- 账号 -->
+      <!-- 账号:已登录时展示当前账号信息,不再显示登录二维码 -->
       <div v-if="tab === 'account'" class="tab-body">
-        <LoginDialog embedded @login-success="emit('login-success')" @close="() => {}" />
-        <button v-if="loggedIn" class="danger" @click="doLogout">退出登录</button>
+        <template v-if="loggedIn">
+          <div class="account-card">
+            <img v-if="user?.face" class="account-face" :src="user.face" alt="" />
+            <div v-else class="account-face placeholder">
+              {{ (user?.name || "B").slice(0, 1) }}
+            </div>
+            <div class="account-meta">
+              <div class="account-name">{{ user?.name || "已登录" }}</div>
+              <div class="account-desc">bilibili 账号已登录</div>
+            </div>
+          </div>
+          <button class="danger" @click="doLogout">退出登录</button>
+        </template>
+        <LoginDialog v-else embedded @login-success="emit('login-success')" @close="() => {}" />
         <div class="section-title">网易云音乐账号</div>
         <NeteaseLogin />
       </div>
@@ -320,6 +333,46 @@ async function saveAliases() {
   color: var(--text-dim);
   border-top: 1px solid var(--border);
   padding-top: 12px;
+}
+.account-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.account-face {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.account-face.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 600;
+}
+.account-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.account-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.account-desc {
+  font-size: 12px;
+  color: var(--text-dim);
 }
 .row {
   display: flex;

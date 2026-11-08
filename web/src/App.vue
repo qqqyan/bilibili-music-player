@@ -447,6 +447,7 @@ function onReplaceTrack(track) {
       v-if="showSettings"
       :initial-tab="settingsTab"
       :logged-in="auth.logged_in"
+      :user="auth.user"
       @close="showSettings = false"
       @login-success="onLoginSuccess"
       @logout="doLogout"
