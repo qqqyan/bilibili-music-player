@@ -204,6 +204,21 @@ async function saveAliases() {
 
         <div class="row">
           <div class="row-label">
+            <span>加入播放列表时自动下载</span>
+            <span class="desc">未下载的曲目加入列表后立即后台下载,避免首次播放边播边下;长视频(10 分钟以上)仍需手动下载</span>
+          </div>
+          <label class="switch">
+            <input
+              v-model="store.settings.auto_download_on_add"
+              type="checkbox"
+              @change="saveBoolSetting('auto_download_on_add', $event.target.checked)"
+            />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="row">
+          <div class="row-label">
             <span>导入匹配歌单后全部加入播放列表</span>
             <span class="desc">以占位曲目入列参与随机播放,播放到该曲时即时匹配(单次搜索,不限频)</span>
           </div>

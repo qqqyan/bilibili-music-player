@@ -38,14 +38,19 @@ def test_settings_roundtrip(test_app, tmp_path, monkeypatch):
     assert resp.status_code == 200
     defaults = resp.json()
     assert defaults["cleanup_old_quality"] is False
+    assert defaults["auto_download_on_add"] is True  # 加入播放列表默认自动下载
 
     with TestClient(test_app) as client:
-        resp = client.put("/api/settings", json={"cleanup_old_quality": True})
+        resp = client.put(
+            "/api/settings", json={"cleanup_old_quality": True, "auto_download_on_add": False}
+        )
     assert resp.status_code == 200
     assert resp.json()["cleanup_old_quality"] is True
+    assert resp.json()["auto_download_on_add"] is False
 
     # 持久化生效:重新读
     assert settings_store.load_settings()["cleanup_old_quality"] is True
+    assert settings_store.load_settings()["auto_download_on_add"] is False
 
 
 def test_playlist_roundtrip(test_app, tmp_path, monkeypatch):
